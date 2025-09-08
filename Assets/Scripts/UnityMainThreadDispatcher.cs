@@ -31,6 +31,8 @@ public class UnityMainThreadDispatcher : MonoBehaviour
 
     private static readonly Queue<Action> _executionQueue = new Queue<Action>();
 
+
+    // Runs every frame, executing all enqueued actions from other threads in the main thread
     public void Update()
     {
         lock (_executionQueue)

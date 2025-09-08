@@ -10,6 +10,16 @@ using Newtonsoft.Json.Bson;
 using System.IO;
 using UnityEngine.UI;
 
+/*
+The component for receiving visualization data from the workstation via UDP 
+and rendering them in AR.
+The data includes:
+Robot: TCP pose of the robot.
+Arrow: 3D deformation field of tactile sensors.
+Force: 3D deformation field of force sensors.
+Image: Image streams of RGB/tactile cameras.
+*/
+
 public class VisualizationServer : MonoBehaviour
 {
     public static VisualizationServer instance;
@@ -34,10 +44,19 @@ public class VisualizationServer : MonoBehaviour
     Transform point;
     Thread threadRobot, threadArrow, threadLog, threadImage, threadForce;
 
+    /*
+    Initialization of the UDP servers and threads.
+    */
     private void Awake()
     {
         instance = this;
     }
+
+    /*
+    Start the UDP servers and threads.
+    Five different threads are used to receive five different types of data:
+    Robot, Arrow, Log, Image, Force.
+    */
     void Start()
     {
         point = new GameObject().transform;
@@ -53,6 +72,7 @@ public class VisualizationServer : MonoBehaviour
         threadForce.Start();
     }
 
+
     void ServerRobot()
     {
         serverRobot = new UdpClient(portRobot);
@@ -67,6 +87,7 @@ public class VisualizationServer : MonoBehaviour
                     using (BsonReader reader = new BsonReader(ms))
                     {
                         BimanualRobotStates pose = serializer.Deserialize<BimanualRobotStates>(reader);
+                        // update the robot's position and rotation in the AR scene on the main thread.
                         UnityMainThreadDispatcher.Instance().Enqueue(() => UpdateRobot(pose));
                     }
                 }
@@ -80,6 +101,7 @@ public class VisualizationServer : MonoBehaviour
 
         }
     }
+
     void ServerArrow()
     {
         serverArrow = new UdpClient(portArrow);
@@ -106,6 +128,7 @@ public class VisualizationServer : MonoBehaviour
             }
         }
     }
+
     void ServerLog()
     {
         serverLog = new UdpClient(portLog);
@@ -120,6 +143,7 @@ public class VisualizationServer : MonoBehaviour
                     using (BsonReader reader = new BsonReader(ms))
                     {
                         UIMessage sensorData = serializer.Deserialize<UIMessage>(reader);
+                        // Currently not displaying the log messages in the AR scene.
                     }
                 }
             }
@@ -147,17 +171,23 @@ public class VisualizationServer : MonoBehaviour
             }
         }
     }
+    
     //List<byte> bytes = new List<byte>();
     void ReceiveImage(UdpClient serverImage, IPEndPoint remoteEndPoint)
     {
+        // ServerImage.Receive(ref remoteEndPoint):
+        // First 4 bytes: total length of the image data (uint)
+        // Second 4 bytes: chunk size (uint) 
         byte[] lengthBytes = serverImage.Receive(ref remoteEndPoint);
         if (lengthBytes.Length != 4)
             throw new Exception();
         uint lengthInt = BitConverter.ToUInt32(lengthBytes, 0);
+
         byte[] chunkBytes = serverImage.Receive(ref remoteEndPoint);
         if (chunkBytes.Length != 4)
             throw new Exception();
         uint lengthChunk = BitConverter.ToUInt32(chunkBytes, 0);
+
         //bytes.Clear();
         byte[] bytes = new byte[lengthInt];
         int count = Mathf.CeilToInt(lengthInt / (float)lengthChunk);
@@ -178,8 +208,12 @@ public class VisualizationServer : MonoBehaviour
     }
     void ServerForce()
     {
-        serverForce = new UdpClient(portForce);
+        serverForce = new UdpClient(portForce); // Create a UDP server that listens on port:{portForce}
+                                                // Create an endpoint to store the sender's IP address and port number
+                                                // IPAddress.Any: accept messages from "any" IP address
+                                                // 0: accept messages from "any" port
         IPEndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+
         while (true)
         {
             try
@@ -213,19 +247,21 @@ public class VisualizationServer : MonoBehaviour
         Vector3 start = new Vector3(pose.arrow.start[0], pose.arrow.start[1], pose.arrow.start[2]);
         Vector3 end = new Vector3(pose.arrow.end[0], pose.arrow.end[1], pose.arrow.end[2]);
         forceArrow.localPosition = end;
+        
         point.parent = forceArrow.parent;
         point.localPosition = start;
-        forceArrow.LookAt(point);
+        forceArrow.LookAt(point); // direction from end to start
+
         float length = Vector3.Distance(end, start);
         forceArrow.GetChild(0).localScale = Vector3.one * pose.scale[0];
         forceArrow.GetChild(1).localScale = new Vector3(pose.scale[1], length, pose.scale[2]);
     }
 
-    [DataContract]
+    [DataContract] // This attribute indicates that the class can be serialized.
     public class Image
     {
-        [DataMember]
-        public string id { get; set; }
+        [DataMember] // This attribute indicates that the property can be serialized.
+        public string id { get; set; } // get: this property can be read. set: this property can be assigned a value.
         [DataMember]
         public bool inHeadSpace { get; set; }
         [DataMember]
@@ -301,7 +337,7 @@ public class VisualizationServer : MonoBehaviour
         rightTCP.localRotation = new Quaternion(pose.rightRobotTCP[4], pose.rightRobotTCP[5], pose.rightRobotTCP[6], pose.rightRobotTCP[3]);
     }
 
-    Dictionary<string, Transform[]> arrowObjects = new Dictionary<string, Transform[]>();
+    Dictionary<string, Transform[]> arrowObjects = new Dictionary<string, Transform[]>(); // key: device_id, value: array of arrow objects
     public Color arrow1Color1;
     public Color arrow1Color2;
     public Color arrow2Color1;
@@ -309,7 +345,8 @@ public class VisualizationServer : MonoBehaviour
     public Transform arrow1;
     public Transform arrow2;
     public Material mat;
-    Dictionary<Color32, Material> lerpColor = new Dictionary<Color32, Material>();
+    Dictionary<Color32, Material> lerpColor = new Dictionary<Color32, Material>(); // key: color, value: material with the color
+    
     void UpdateArrow(TactileSensorMessage data)
     {
         string device_id = data.device_id;

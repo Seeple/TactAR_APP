@@ -15,3 +15,11 @@ MemoryCaptures/
 UserSettings/
 
 *_DoNotShip/
+
+*.asset
+
+*.meta
+
+*.unity
+
+.vscode/

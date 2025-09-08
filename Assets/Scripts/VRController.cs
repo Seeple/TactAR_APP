@@ -51,6 +51,8 @@ public class Message
         rightHand = new HandMessage();
         leftHand = new HandMessage();
     }
+
+    // Transform the head and hand poses to the calibrated align space
     public void TransformToAlignSpace()
     {
         if (Calibration.instance)
@@ -71,13 +73,18 @@ public class Message
     }
 }
 
+/*
+Component for collecting the poses and commands of the VR controller 
+and sending to the worksation via HTTP.
+*/
+
 public class VRController : MonoBehaviour
 {
     public static VRController instance;
-    public string ip;
-    public int port;
+    public string ip; // The default IP of the workstation
+    public int port; // The default port of the workstation
     HttpClient client = new HttpClient();
-    public int Hz = 30;
+    public int Hz = 30; // The frequency at which the VR controller pose data is sent to the workstation
 
     public TMPro.TextMeshProUGUI showText;
 
@@ -107,6 +114,7 @@ public class VRController : MonoBehaviour
     bool calibrationMode = false;
     bool cold = false;
 
+    // Toggle calibration mode safely with a cooldown
     async void SwitchMode()
     {
         if (cold) return;
@@ -125,6 +133,7 @@ public class VRController : MonoBehaviour
         await Task.Delay(500);
         cold = false;
     }
+
     public void Update()
     {
         keyboard.transform.position = controller_right.position - new Vector3(0, 0.2f, 0);
