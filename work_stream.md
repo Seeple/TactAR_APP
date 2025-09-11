@@ -74,7 +74,17 @@ hack一段轨迹，在AR系统中通过点加坐标轴的方式可视化出来
 
 ##### 将原始TactAR成功部署到Meta Quest 3上
 
-##### 尝试配置VR Simulator
+##### 尝试配置VR Simulator，并使用VR simulator调试程序
+
+安装的Package：
+
+- XR Interaction Toolkit
+
+    https://docs.unity3d.com/Packages/com.unity.xr.interaction.toolkit@3.0/manual/index.html
+
+- XR Device Simulator
+
+    https://docs.unity.cn/Packages/com.unity.xr.interaction.toolkit@2.3/manual/xr-device-simulator-overview.html
 
 
 
