@@ -89,6 +89,10 @@ public class VRController : MonoBehaviour
     public TMPro.TextMeshProUGUI showText;
 
     public MyKeyboard keyboard;
+    
+    public CubeVisualizer cubeVisualizer; // Test: Visualize a cube in front of the user
+    
+    public TrajectoryVisualizer trajectoryVisualizer; // Test: Trajectory visualization component
 
     public Transform ovrhead;
 
@@ -134,6 +138,22 @@ public class VRController : MonoBehaviour
         cold = false;
     }
 
+    async void ToggleCubeFollowMode()
+    {
+        if (cold) return;
+        cold = true;
+        if (cubeVisualizer != null)
+        {
+            bool currentSmoothFollow = cubeVisualizer.smoothFollow;
+            cubeVisualizer.SetSmoothFollow(!currentSmoothFollow);
+            
+            string mode = currentSmoothFollow ? "固定位置" : "平滑跟随";
+            Debug.Log($"立方体模式切换为: {mode}");
+        }
+        await Task.Delay(500);
+        cold = false;
+    }
+
     public void Update()
     {
         keyboard.transform.position = controller_right.position - new Vector3(0, 0.2f, 0);
@@ -153,6 +173,36 @@ public class VRController : MonoBehaviour
         if (OVRInput.GetDown(OVRInput.RawButton.LThumbstick))
         {
             keyboard.gameObject.SetActive(!keyboard.gameObject.activeSelf);
+        }
+        
+        // Use the right hand controller's thumbstick press to toggle cube display
+        if (OVRInput.GetDown(OVRInput.RawButton.RThumbstick))
+        {
+            if (cubeVisualizer != null)
+            {
+                bool isActive = cubeVisualizer.gameObject.activeSelf;
+                cubeVisualizer.SetCubeVisible(!isActive);
+            }
+        }
+        
+        // Change the follow mode of the cube with long press of B button + thumbstick press(Test)
+        if (OVRInput.Get(OVRInput.RawButton.B) && OVRInput.GetDown(OVRInput.RawButton.RThumbstick))
+        {
+            if (cubeVisualizer != null && !cold)
+            {
+                ToggleCubeFollowMode();
+            }
+        }
+        
+        // Use the right hand controller's A button press to toggle trajectory display
+        if (OVRInput.GetDown(OVRInput.RawButton.A))
+        {
+            if (trajectoryVisualizer != null)
+            {
+                bool isVisible = trajectoryVisualizer.showTrajectory;
+                trajectoryVisualizer.SetTrajectoryVisible(!isVisible);
+                Debug.Log($"轨迹显示切换为: {(!isVisible ? "显示" : "隐藏")}");
+            }
         }
     }
 
