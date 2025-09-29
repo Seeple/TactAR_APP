@@ -16,7 +16,7 @@ public class TrajectoryVisualizer : MonoBehaviour
     public float lineWidth = 0.005f;
     
     [Header("编辑器设置")]
-    public bool createDefaultPoints = false; // Create default Points in Unity Editor
+    public bool createDefaultPoints = true; // Create default Points in Unity Editor
     public bool updateVisualization = false; // Update trajectory visualization in Play Mode
     
     [Header("参考对象")]

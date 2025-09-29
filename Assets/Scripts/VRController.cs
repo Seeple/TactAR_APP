@@ -22,7 +22,7 @@ public class HandMessage
     {
         if (Calibration.instance)
         {
-            Vector3 vector3 = Calibration.instance.GetPosition(new Vector3(wristPos[0], wristPos[1], wristPos[2]));
+            Vector3 vector3 = Calibration.instance.GetPosition(new Vector3(wristPos[0], wristPos[1], wristPos[2])); // worldPos
             wristPos[0] = vector3.x;
             wristPos[1] = vector3.y;
             wristPos[2] = vector3.z;
@@ -93,7 +93,8 @@ public class VRController : MonoBehaviour
     public CubeVisualizer cubeVisualizer; // Test: Visualize a cube in front of the user
     
     public TrajectoryVisualizer trajectoryVisualizer; // Test: Trajectory visualization component
-
+    
+    public ChunkVisualizer chunkVisualizer; // Test: Real-time trajectory visualization component
     public Transform ovrhead;
 
     public Transform controller_right;
@@ -154,6 +155,29 @@ public class VRController : MonoBehaviour
         cold = false;
     }
 
+    async void ToggleReferenceSettingMode()
+    {
+        if (cold) return;
+        cold = true;
+        
+        if (chunkVisualizer != null)
+        {
+            if (!chunkVisualizer.isInReferenceMode)
+            {
+                chunkVisualizer.ToggleReferenceMode();
+                Debug.Log("进入基准点设置模式 - 蓝色指示球已显示");
+            }
+            else
+            {
+                chunkVisualizer.SetReference(ovrhead.position, ovrhead.rotation);
+                Debug.Log("基准点已设置为当前头部位置和旋转");
+            }
+        }
+        
+        await Task.Delay(500);
+        cold = false;
+    }
+
     public void Update()
     {
         keyboard.transform.position = controller_right.position - new Vector3(0, 0.2f, 0);
@@ -175,16 +199,12 @@ public class VRController : MonoBehaviour
             keyboard.gameObject.SetActive(!keyboard.gameObject.activeSelf);
         }
         
-        // Use the right hand controller's thumbstick press to toggle cube display
-        if (OVRInput.GetDown(OVRInput.RawButton.RThumbstick))
+        // Update the position of the red indicator sphere in reference setting mode
+        if (chunkVisualizer != null && chunkVisualizer.isInReferenceMode)
         {
-            if (cubeVisualizer != null)
-            {
-                bool isActive = cubeVisualizer.gameObject.activeSelf;
-                cubeVisualizer.SetCubeVisible(!isActive);
-            }
+            chunkVisualizer.UpdateReferenceIndicator(ovrhead.position, ovrhead.rotation);
         }
-        
+
         // Change the follow mode of the cube with long press of B button + thumbstick press(Test)
         if (OVRInput.Get(OVRInput.RawButton.B) && OVRInput.GetDown(OVRInput.RawButton.RThumbstick))
         {
@@ -193,15 +213,13 @@ public class VRController : MonoBehaviour
                 ToggleCubeFollowMode();
             }
         }
-        
-        // Use the right hand controller's A button press to toggle trajectory display
-        if (OVRInput.GetDown(OVRInput.RawButton.A))
+
+        // Use left hand controller's X button press to toggle reference setting mode
+        if (OVRInput.GetDown(OVRInput.RawButton.X))
         {
-            if (trajectoryVisualizer != null)
+            if (chunkVisualizer != null && ovrhead != null && !cold)
             {
-                bool isVisible = trajectoryVisualizer.showTrajectory;
-                trajectoryVisualizer.SetTrajectoryVisible(!isVisible);
-                Debug.Log($"轨迹显示切换为: {(!isVisible ? "显示" : "隐藏")}");
+                ToggleReferenceSettingMode();
             }
         }
     }

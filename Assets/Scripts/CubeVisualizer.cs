@@ -1,15 +1,23 @@
 using UnityEngine;
+using System.Net.Sockets;
+using System.Net;
+using System.Runtime.Serialization;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Bson;
+using System.IO;
+using System;
+using System.Threading;
+using System.Collections.Generic;
 
 /*
-在用户前方显示一个立方体，支持两种模式：
 1. smoothFollow = true: 平滑跟随用户的位置和旋转
-2. smoothFollow = false: 固定在空间中的某个位置
+2. smoothFollow = false: 接收工作站坐标进行遥操作移动
 */
 
 public class CubeVisualizer : MonoBehaviour
 {
     [Header("立方体设置")]
-    public GameObject cubePrefab; // TODO: create a cube prefab
+    public GameObject cubePrefab; 
     public float distanceFromUser = 2.0f;
     public float cubeSize = 0.5f; 
     public Color cubeColor = Color.blue; 
@@ -19,24 +27,52 @@ public class CubeVisualizer : MonoBehaviour
     public float followSpeed = 5.0f; 
 
     [Header("位置更新")]
-    public float updateFrequency = 10.0f; 
+    public float updateFrequency = 50.0f; 
 
     [Header("参考对象")]
     public Transform userHead; 
+    public Transform leftController; 
     
-
+    [Header("遥操作设置")]
+    public int remoteControlPort = 10007;
+    
     private GameObject cubeInstance; 
     private Renderer cubeRenderer;
     private float lastUpdateTime = 0f; 
     private Vector3 fixedPosition; 
     private Quaternion fixedRotation; 
-    private bool isFixedPositionSet = false; 
+    private bool isFixedPositionSet = false;
+    
+    // Variables for remote control
+    private Vector3 initialLeftControllerPosition;
+    private Quaternion initialLeftControllerRotation;
+    private Vector3 remoteControllerPosition;
+    private Quaternion remoteControllerRotation;
+    private bool hasRemoteData = false;
+    private UdpClient remoteControlServer;
+    private Thread remoteControlThread;
+    private JsonSerializer serializer = new JsonSerializer();
+    
+    [DataContract]
+    public class RemoteControlMessage
+    {
+        [DataMember]
+        public List<float> position { get; set; } // [x, y, z]
+        [DataMember]
+        public List<float> rotation { get; set; } // [x, y, z, w] - quaternion
+    } 
 
     void Start()
     {
         if (userHead == null)
         {
-            Debug.LogError("CubeVisualizer: userHead未设置！请在Unity Editor中指定用户头部Transform");
+            Debug.LogError("CubeVisualizer: userHead未设置,请在Unity Editor中指定用户头部Transform");
+            return;
+        }
+
+        if (leftController == null)
+        {
+            Debug.LogError("CubeVisualizer: leftController未设置,请在Unity Editor中指定左手控制器Transform");
             return;
         }
 
@@ -45,7 +81,10 @@ public class CubeVisualizer : MonoBehaviour
         if (!smoothFollow && userHead != null)
         {
             SetFixedPosition();
+            RecordInitialLeftControllerTransform();
         }
+        
+        StartRemoteControlServer();
     }
 
     void Update()
@@ -63,21 +102,11 @@ public class CubeVisualizer : MonoBehaviour
     {
         if (cubePrefab != null)
         {
-            // Create from prefab
             cubeInstance = Instantiate(cubePrefab);
         }
         else
         {
-            cubeInstance = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            cubeInstance.name = "UserCube";
-
-            cubeInstance.transform.localScale = Vector3.one * cubeSize;
-
-            cubeRenderer = cubeInstance.GetComponent<Renderer>();
-            if (cubeRenderer != null)
-            {
-                cubeRenderer.material.color = cubeColor;
-            }
+            Debug.LogWarning("CubeVisualizer: 未设置cubePrefab");
         }
 
         cubeInstance.transform.SetParent(this.transform);
@@ -110,23 +139,26 @@ public class CubeVisualizer : MonoBehaviour
         }
         else
         {
-            // fix mode: use fixed position and rotation
+            // remote control mode: use remote controller data to move cube
             if (!isFixedPositionSet)
             {
                 SetFixedPosition();
+                RecordInitialLeftControllerTransform();
             }
             
-            cubeInstance.transform.position = fixedPosition;
-            cubeInstance.transform.rotation = fixedRotation;
-        }
-    }
-
-    // show/hide cube
-    public void SetCubeVisible(bool visible)
-    {
-        if (cubeInstance != null)
-        {
-            cubeInstance.SetActive(visible);
+            if (hasRemoteData && leftController != null)
+            {
+                Vector3 controllerPositionDelta = remoteControllerPosition - initialLeftControllerPosition;
+                Quaternion controllerRotationDelta = remoteControllerRotation * Quaternion.Inverse(initialLeftControllerRotation);
+                
+                cubeInstance.transform.position = fixedPosition + controllerPositionDelta;
+                cubeInstance.transform.rotation = controllerRotationDelta * fixedRotation;
+            }
+            else
+            {
+                cubeInstance.transform.position = fixedPosition;
+                cubeInstance.transform.rotation = fixedRotation;
+            }
         }
     }
 
@@ -141,33 +173,86 @@ public class CubeVisualizer : MonoBehaviour
         }
     }
     
-    // change follow mode
+    // change mode:smooth follow or remote control
     public void SetSmoothFollow(bool smooth)
     {
         smoothFollow = smooth;
         if (!smooth)
         {
             SetFixedPosition();
+            RecordInitialLeftControllerTransform();
         }
-        Debug.Log($"CubeVisualizer: 跟随模式设置为 {(smooth ? "平滑跟随" : "固定位置")}");
+        Debug.Log($"CubeVisualizer: 跟随模式设置为 {(smooth ? "平滑跟随" : "遥操作模式")}");
     }
-
-    public void ResetFixedPosition()
+    
+    // record left controller initial transform
+    void RecordInitialLeftControllerTransform()
     {
-        SetFixedPosition();
-    }
-
-    public void SetDistanceFromUser(float newDistance)
-    {
-        distanceFromUser = newDistance;
-        if (!smoothFollow)
+        if (leftController != null)
         {
-            SetFixedPosition();
+            initialLeftControllerPosition = leftController.position;
+            initialLeftControllerRotation = leftController.rotation;
+            Debug.Log($"CubeVisualizer: 记录初始左手控制器位置 {initialLeftControllerPosition}");
+        }
+    }
+
+    void StartRemoteControlServer()
+    {
+        remoteControlThread = new Thread(RemoteControlServer);
+        remoteControlThread.Start();
+        Debug.Log($"CubeVisualizer: 启动遥控服务器，监听端口 {remoteControlPort}");
+    }
+    
+    void RemoteControlServer()
+    {
+        remoteControlServer = new UdpClient(remoteControlPort);
+        IPEndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+        
+        while (true)
+        {
+            try
+            {
+                byte[] receiveBytes = remoteControlServer.Receive(ref remoteEndPoint);
+                using (MemoryStream ms = new MemoryStream(receiveBytes))
+                {
+                    using (BsonReader reader = new BsonReader(ms))
+                    {
+                        RemoteControlMessage remoteData = serializer.Deserialize<RemoteControlMessage>(reader);
+                        
+                        UnityMainThreadDispatcher.Instance().Enqueue(() => {
+                            UpdateRemoteControlData(remoteData);
+                        });
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"CubeVisualizer遥控数据接收错误: {e.Message}");
+            }
+        }
+    }
+    
+    void UpdateRemoteControlData(RemoteControlMessage data)
+    {
+        if (data.position != null && data.position.Count >= 3 &&
+            data.rotation != null && data.rotation.Count >= 4)
+        {
+            remoteControllerPosition = new Vector3(data.position[0], data.position[1], data.position[2]);
+            remoteControllerRotation = new Quaternion(data.rotation[0], data.rotation[1], data.rotation[2], data.rotation[3]);
+            hasRemoteData = true;
         }
     }
 
     void OnDestroy()
     {
+        if (remoteControlThread != null && remoteControlThread.IsAlive)
+        {
+            remoteControlThread.Abort();
+        }
+        if (remoteControlServer != null)
+        {
+            remoteControlServer.Close();
+        }
         if (cubeInstance != null)
         {
             DestroyImmediate(cubeInstance);
