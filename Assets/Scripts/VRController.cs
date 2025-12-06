@@ -13,9 +13,9 @@ public class HandMessage
     public bool[] buttonState;
     public HandMessage()
     {
-        wristPos = new float[3];//position of the hand
-        wristQuat = new float[4];//quaternion of the hand
-        buttonState = new bool[5];//buttonState of B(Y)/A(X)/Thumbstick/IndexTrigger/HandTrigger
+        wristPos = new float[3]; //position of the hand
+        wristQuat = new float[4]; //quaternion of the hand
+        buttonState = new bool[5]; //buttonState of B(Y)/A(X)/Thumbstick/IndexTrigger/HandTrigger
     }
 
     public void TransformToAlignSpace()
@@ -90,11 +90,7 @@ public class VRController : MonoBehaviour
 
     public MyKeyboard keyboard;
     
-    public CubeVisualizer cubeVisualizer; // Test: Visualize a cube in front of the user
-    
-    public TrajectoryVisualizer trajectoryVisualizer; // Test: Trajectory visualization component
-    
-    public ChunkVisualizer chunkVisualizer; // Test: Real-time trajectory visualization component
+    public ChunkVisualizer chunkVisualizer; // action chunk visualization component
     public Transform ovrhead;
 
     public Transform controller_right;
@@ -130,6 +126,7 @@ public class VRController : MonoBehaviour
         cold = false;
     }
 
+    /* 已禁用 - ClearImage 功能
     async void ClearImage()
     {
         if (cold) return;
@@ -138,89 +135,33 @@ public class VRController : MonoBehaviour
         await Task.Delay(500);
         cold = false;
     }
-
-    async void ToggleCubeFollowMode()
-    {
-        if (cold) return;
-        cold = true;
-        if (cubeVisualizer != null)
-        {
-            bool currentSmoothFollow = cubeVisualizer.smoothFollow;
-            cubeVisualizer.SetSmoothFollow(!currentSmoothFollow);
-            
-            string mode = currentSmoothFollow ? "固定位置" : "平滑跟随";
-            Debug.Log($"立方体模式切换为: {mode}");
-        }
-        await Task.Delay(500);
-        cold = false;
-    }
-
-    async void ToggleReferenceSettingMode()
-    {
-        if (cold) return;
-        cold = true;
-        
-        if (chunkVisualizer != null)
-        {
-            if (!chunkVisualizer.isInReferenceMode)
-            {
-                chunkVisualizer.ToggleReferenceMode();
-                Debug.Log("进入基准点设置模式 - 蓝色指示球已显示");
-            }
-            else
-            {
-                chunkVisualizer.SetReference(ovrhead.position, ovrhead.rotation);
-                Debug.Log("基准点已设置为当前头部位置和旋转");
-            }
-        }
-        
-        await Task.Delay(500);
-        cold = false;
-    }
+    */
 
     public void Update()
     {
         keyboard.transform.position = controller_right.position - new Vector3(0, 0.2f, 0);
         keyboard.transform.LookAt(Camera.main.transform);
 
-
+        // switch between calibration mode and normal mode with long press of A+X buttons
         if (OVRInput.Get(OVRInput.RawButton.X) && OVRInput.Get(OVRInput.RawButton.A))
         {
             SwitchMode();
         }
+
+        /* 已禁用 - 清除图像功能
+        // clear all images on the workstation with long press of B+Y buttons
         if (OVRInput.Get(OVRInput.RawButton.Y) && OVRInput.Get(OVRInput.RawButton.B))
         {
             ClearImage();
         }
+        */
+        
         if (calibrationMode) return;
 
+        // Toggle the keyboard display with left hand controller's thumbstick press
         if (OVRInput.GetDown(OVRInput.RawButton.LThumbstick))
         {
             keyboard.gameObject.SetActive(!keyboard.gameObject.activeSelf);
-        }
-        
-        // Update the position of the red indicator sphere in reference setting mode
-        if (chunkVisualizer != null && chunkVisualizer.isInReferenceMode)
-        {
-            chunkVisualizer.UpdateReferenceIndicator(ovrhead.position, ovrhead.rotation);
-        }
-
-        // Change the follow mode of the cube with long press of B button + thumbstick press(Test)
-        if (OVRInput.Get(OVRInput.RawButton.B) && OVRInput.GetDown(OVRInput.RawButton.RThumbstick))
-        {
-            if (cubeVisualizer != null && !cold)
-            {
-                ToggleCubeFollowMode();
-            }
-        }
-
-        // Use left hand controller's X button press to toggle reference setting mode
-        if (OVRInput.GetDown(OVRInput.RawButton.X))
-        {
-            if (chunkVisualizer != null && ovrhead != null && !cold)
-            {
-                ToggleReferenceSettingMode();
-            }
         }
     }
 
