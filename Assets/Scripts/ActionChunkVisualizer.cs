@@ -44,6 +44,11 @@ public class ChunkVisualizer : MonoBehaviour
     [Header("性能设置")]
     public int poolInitialSize = 100;
     
+    [Header("交互设置")]
+    public bool enablePointSelection = true;  // 是否启用点选择
+    public Color selectedPointColor = Color.yellow;  // 选中点的颜色
+    public Color hoverPointColor = Color.cyan;  // 悬停点的颜色
+    
     // Action chunk data: 6D pose (x,y,z,r,p,y)
     [DataContract]
     public class TrajectoryPoint
@@ -124,7 +129,25 @@ public class ChunkVisualizer : MonoBehaviour
         Renderer renderer = point.GetComponent<Renderer>();
         renderer.material = whiteMaterial;
         
-        DestroyImmediate(point.GetComponent<Collider>());
+        // 如果启用点选择，保留Collider并添加TrajectoryPointData组件
+        if (enablePointSelection)
+        {
+            // 保留SphereCollider用于射线检测
+            SphereCollider collider = point.GetComponent<SphereCollider>();
+            if (collider != null)
+            {
+                collider.isTrigger = false;  // 确保可以被射线检测到
+            }
+            
+            // 添加TrajectoryPointData组件
+            TrajectoryPointData pointData = point.AddComponent<TrajectoryPointData>();
+            pointData.visualizer = this;
+        }
+        else
+        {
+            DestroyImmediate(point.GetComponent<Collider>());
+        }
+        
         return point;
     }
     
@@ -228,6 +251,18 @@ public class ChunkVisualizer : MonoBehaviour
             GameObject point = GetPointFromPool();
             // 使用 localPosition 而非 position，使其相对于父对象（Calibration）
             point.transform.localPosition = positions[i];
+            
+            // 如果启用点选择，设置点的索引
+            if (enablePointSelection)
+            {
+                TrajectoryPointData pointData = point.GetComponent<TrajectoryPointData>();
+                if (pointData != null)
+                {
+                    pointData.pointIndex = i;
+                    pointData.visualizer = this;
+                }
+            }
+            
             point.SetActive(true);
             activePoints.Add(point);
         }
@@ -365,6 +400,30 @@ public class ChunkVisualizer : MonoBehaviour
     void ClearVisualization()
     {
         ReturnObjectsToPool();
+    }
+    
+    // 通过索引设置点的悬停状态（用于VRController）
+    public void SetPointHovered(int pointIndex, bool isHovered)
+    {
+        if (pointIndex < 0 || pointIndex >= activePoints.Count) return;
+        
+        TrajectoryPointData pointData = activePoints[pointIndex].GetComponent<TrajectoryPointData>();
+        if (pointData != null)
+        {
+            pointData.SetHovered(isHovered);
+        }
+    }
+    
+    // 通过索引设置点的选中状态（用于VRController）
+    public void SetPointSelected(int pointIndex, bool isSelected)
+    {
+        if (pointIndex < 0 || pointIndex >= activePoints.Count) return;
+        
+        TrajectoryPointData pointData = activePoints[pointIndex].GetComponent<TrajectoryPointData>();
+        if (pointData != null)
+        {
+            pointData.SetSelected(isSelected);
+        }
     }
     
     void OnDestroy()
