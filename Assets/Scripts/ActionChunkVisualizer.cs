@@ -49,6 +49,10 @@ public class ChunkVisualizer : MonoBehaviour
     public Color selectedPointColor = Color.yellow;  // 选中点的颜色
     public Color hoverPointColor = Color.cyan;  // 悬停点的颜色
     
+    // 记录选中和悬停状态（用于轨迹更新后恢复）
+    private int currentSelectedPointIndex = -1;
+    private int currentHoveredPointIndex = -1;
+    
     // Action chunk data: 6D pose (x,y,z,r,p,y)
     [DataContract]
     public class TrajectoryPoint
@@ -213,6 +217,9 @@ public class ChunkVisualizer : MonoBehaviour
         CreateTrajectoryPoints(positions);
         CreateConnectionLines(positions);
         CreateCoordinateAxes(positions, rotations);
+        
+        // 轨迹更新后恢复选中和悬停状态
+        RestorePointStates();
     }
     
     List<Vector3> ExtractPositions(List<TrajectoryPoint> points)
@@ -407,6 +414,16 @@ public class ChunkVisualizer : MonoBehaviour
     {
         if (pointIndex < 0 || pointIndex >= activePoints.Count) return;
         
+        // 更新状态记录
+        if (isHovered)
+        {
+            currentHoveredPointIndex = pointIndex;
+        }
+        else if (currentHoveredPointIndex == pointIndex)
+        {
+            currentHoveredPointIndex = -1;
+        }
+        
         TrajectoryPointData pointData = activePoints[pointIndex].GetComponent<TrajectoryPointData>();
         if (pointData != null)
         {
@@ -419,11 +436,58 @@ public class ChunkVisualizer : MonoBehaviour
     {
         if (pointIndex < 0 || pointIndex >= activePoints.Count) return;
         
+        // 更新状态记录
+        if (isSelected)
+        {
+            currentSelectedPointIndex = pointIndex;
+        }
+        else if (currentSelectedPointIndex == pointIndex)
+        {
+            currentSelectedPointIndex = -1;
+        }
+        
         TrajectoryPointData pointData = activePoints[pointIndex].GetComponent<TrajectoryPointData>();
         if (pointData != null)
         {
             pointData.SetSelected(isSelected);
         }
+    }
+    
+    // 新增：恢复点的选中和悬停状态（轨迹更新后调用）
+    void RestorePointStates()
+    {
+        // 恢复选中状态
+        if (currentSelectedPointIndex >= 0 && currentSelectedPointIndex < activePoints.Count)
+        {
+            TrajectoryPointData pointData = activePoints[currentSelectedPointIndex].GetComponent<TrajectoryPointData>();
+            if (pointData != null)
+            {
+                pointData.pointIndex = currentSelectedPointIndex;
+                pointData.visualizer = this;
+                pointData.SetSelected(true);
+            }
+        }
+        
+        // 恢复悬停状态（只在未选中时生效）
+        if (currentHoveredPointIndex >= 0 && 
+            currentHoveredPointIndex < activePoints.Count &&
+            currentHoveredPointIndex != currentSelectedPointIndex)
+        {
+            TrajectoryPointData pointData = activePoints[currentHoveredPointIndex].GetComponent<TrajectoryPointData>();
+            if (pointData != null)
+            {
+                pointData.pointIndex = currentHoveredPointIndex;
+                pointData.visualizer = this;
+                pointData.SetHovered(true);
+            }
+        }
+    }
+    
+    // 清除所有选中/悬停状态（可选，用于重置）
+    public void ClearAllStates()
+    {
+        currentSelectedPointIndex = -1;
+        currentHoveredPointIndex = -1;
     }
     
     void OnDestroy()

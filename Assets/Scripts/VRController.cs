@@ -359,11 +359,18 @@ public class VRController : MonoBehaviour
         if (selectedPointIndex >= 0)
         {
             Debug.Log($"停止编辑轨迹点: {selectedPointIndex}");
-
-            // 清除编辑状态但保持点的选中显示
+            
+            // 取消选中状态，点变回白色
+            if (chunkVisualizer != null)
+            {
+                chunkVisualizer.SetPointSelected(selectedPointIndex, false);
+            }
+            
+            // 清除编辑状态和选中索引
             message.trajectoryEdit.isEditing = false;
             message.trajectoryEdit.selectedPointIndex = -1;
             isEditingTrajectory = false;
+            selectedPointIndex = -1; 
         }
     }
 
