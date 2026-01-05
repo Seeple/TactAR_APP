@@ -24,25 +24,25 @@ public class VisualizationServer : MonoBehaviour
 {
     public static VisualizationServer instance;
     public Transform head;
-    public int portRobot = 10001;
-    public int portArrow = 10002;
-    public int portLog = 10003;
-    public int portImage = 10004;
-    public int portForce = 10005;
+    public int portRobot = 10001; // Robot TCP 
+    // public int portArrow = 10002;  // Tactile sensor arrows - 已禁用
+    // public int portLog = 10003; // Log messages - 已禁用
+    // public int portImage = 10004; // Image streams - 已禁用
+    // public int portForce = 10005; // Force sensor arrows - 已禁用
     public Transform leftTCP;
     public Transform rightTCP;
-    public Transform leftForce;
-    public Transform rightForce;
+    // public Transform leftForce;  // 已禁用
+    // public Transform rightForce; // 已禁用
     UdpClient serverRobot;
-    UdpClient serverArrow;
-    UdpClient serverLog;
-    UdpClient serverImage;
-    UdpClient serverForce;
+    // UdpClient serverArrow;  // 已禁用
+    // UdpClient serverLog;    // 已禁用
+    // UdpClient serverImage;  // 已禁用
+    // UdpClient serverForce;  // 已禁用
 
     JsonSerializer serializer = new JsonSerializer();
 
     Transform point;
-    Thread threadRobot, threadArrow, threadLog, threadImage, threadForce;
+    Thread threadRobot; //, threadArrow, threadLog, threadImage, threadForce; // 已禁用其他线程
 
     /*
     Initialization of the UDP servers and threads.
@@ -54,22 +54,24 @@ public class VisualizationServer : MonoBehaviour
 
     /*
     Start the UDP servers and threads.
-    Five different threads are used to receive five different types of data:
-    Robot, Arrow, Log, Image, Force.
+    Currently only Robot TCP visualization is enabled.
+    Other features (Arrow, Log, Image, Force) are disabled.
     */
     void Start()
     {
         point = new GameObject().transform;
         threadRobot = new Thread(ServerRobot);
         threadRobot.Start();
-        threadArrow = new Thread(ServerArrow);
-        threadArrow.Start();
-        threadLog = new Thread(ServerLog);
-        threadLog.Start();
-        threadImage = new Thread(ServerImage);
-        threadImage.Start();
-        threadForce = new Thread(ServerForce);
-        threadForce.Start();
+        
+        // 已禁用的功能
+        // threadArrow = new Thread(ServerArrow);
+        // threadArrow.Start();
+        // threadLog = new Thread(ServerLog);
+        // threadLog.Start();
+        // threadImage = new Thread(ServerImage);
+        // threadImage.Start();
+        // threadForce = new Thread(ServerForce);
+        // threadForce.Start();
     }
 
 
@@ -102,6 +104,7 @@ public class VisualizationServer : MonoBehaviour
         }
     }
 
+    /* 已禁用 - Tactile Sensor Arrow 可视化
     void ServerArrow()
     {
         serverArrow = new UdpClient(portArrow);
@@ -128,7 +131,9 @@ public class VisualizationServer : MonoBehaviour
             }
         }
     }
+    */
 
+    /* 已禁用 - Log 消息接收
     void ServerLog()
     {
         serverLog = new UdpClient(portLog);
@@ -153,7 +158,9 @@ public class VisualizationServer : MonoBehaviour
             }
         }
     }
+    */
 
+    /* 已禁用 - 图像流接收
     void ServerImage()
     {
         serverImage = new UdpClient(portImage);
@@ -171,7 +178,9 @@ public class VisualizationServer : MonoBehaviour
             }
         }
     }
+    */
     
+    /* 已禁用 - 图像数据接收
     //List<byte> bytes = new List<byte>();
     void ReceiveImage(UdpClient serverImage, IPEndPoint remoteEndPoint)
     {
@@ -206,6 +215,9 @@ public class VisualizationServer : MonoBehaviour
             }
         }
     }
+    */
+    
+    /* 已禁用 - Force Sensor 可视化
     void ServerForce()
     {
         serverForce = new UdpClient(portForce); // Create a UDP server that listens on port:{portForce}
@@ -256,6 +268,7 @@ public class VisualizationServer : MonoBehaviour
         forceArrow.GetChild(0).localScale = Vector3.one * pose.scale[0];
         forceArrow.GetChild(1).localScale = new Vector3(pose.scale[1], length, pose.scale[2]);
     }
+    */
 
     [DataContract] // This attribute indicates that the class can be serialized.
     public class Image
@@ -337,6 +350,7 @@ public class VisualizationServer : MonoBehaviour
         rightTCP.localRotation = new Quaternion(pose.rightRobotTCP[4], pose.rightRobotTCP[5], pose.rightRobotTCP[6], pose.rightRobotTCP[3]);
     }
 
+    /* 已禁用 - Tactile Sensor Arrow 可视化相关变量和方法
     Dictionary<string, Transform[]> arrowObjects = new Dictionary<string, Transform[]>(); // key: device_id, value: array of arrow objects
     public Color arrow1Color1;
     public Color arrow1Color2;
@@ -392,7 +406,9 @@ public class VisualizationServer : MonoBehaviour
             arrowObjects[device_id][i].GetChild(1).localScale = new Vector3(data.scale[1], length, data.scale[2]);
         }
     }
+    */
 
+    /* 已禁用 - 图像流可视化相关方法
     public void ClearImage()
     {
         foreach (var item in imageUI)
@@ -429,17 +445,19 @@ public class VisualizationServer : MonoBehaviour
             (imageUI[item.id].texture as Texture2D).LoadImage(item.image, true);
         }
     }
+    */
+    
     private void OnDestroy()
     {
         serverRobot?.Close();
-        serverArrow?.Close();
-        serverLog?.Close();
-        serverImage?.Close();
-        serverForce?.Close();
+        // serverArrow?.Close();   // 已禁用
+        // serverLog?.Close();     // 已禁用
+        // serverImage?.Close();   // 已禁用
+        // serverForce?.Close();   // 已禁用
         threadRobot.Abort();
-        threadArrow.Abort();
-        threadLog.Abort();
-        threadImage.Abort();
-        threadForce.Abort();
+        // threadArrow.Abort();    // 已禁用
+        // threadLog.Abort();      // 已禁用
+        // threadImage.Abort();    // 已禁用
+        // threadForce.Abort();    // 已禁用
     }
 }
