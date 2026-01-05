@@ -26,24 +26,6 @@ public class ChunkVisualizer : MonoBehaviour
     public Material greenMaterial; 
     public Material blueMaterial;
     
-    private UdpClient server;
-    private Thread receiveThread;
-    private JsonSerializer serializer = new JsonSerializer();
-    
-    private GameObject trajectoryContainer;
-    
-    // Object pools for performance optimization
-    private Queue<GameObject> pointPool = new Queue<GameObject>();
-    private Queue<GameObject> linePool = new Queue<GameObject>();
-    private Queue<GameObject> axisPool = new Queue<GameObject>();
-    
-    private List<GameObject> activePoints = new List<GameObject>();
-    private List<GameObject> activeLines = new List<GameObject>();
-    private List<GameObject> activeAxes = new List<GameObject>();
-
-    [Header("性能设置")]
-    public int poolInitialSize = 100;
-    
     [Header("交互设置")]
     public bool enablePointSelection = true;  // 是否启用点选择
     public Color selectedPointColor = Color.yellow;  // 选中点的颜色
@@ -52,6 +34,17 @@ public class ChunkVisualizer : MonoBehaviour
     // 记录选中和悬停状态（用于轨迹更新后恢复）
     private int currentSelectedPointIndex = -1;
     private int currentHoveredPointIndex = -1;
+    
+    private UdpClient server;
+    private Thread receiveThread;
+    private JsonSerializer serializer = new JsonSerializer();
+    
+    private TrajectoryData currentTrajectoryData;
+    
+    private GameObject trajectoryContainer;
+    private List<GameObject> pointObjects = new List<GameObject>();
+    private List<GameObject> lineObjects = new List<GameObject>();
+    private List<GameObject> axisObjects = new List<GameObject>();
     
     // Action chunk data: 6D pose (x,y,z,r,p,y)
     [DataContract]
@@ -82,15 +75,15 @@ public class ChunkVisualizer : MonoBehaviour
     
     void Start()
     {
-        InitializeObjectPools(); 
+        InitializeTrajectoryContainer();
         StartReceivingData();
     }
     
-    void InitializeObjectPools()
+    void InitializeTrajectoryContainer()
     {
+        // 创建轨迹容器并挂载到 Calibration 实例下
         trajectoryContainer = new GameObject("ChunkTrajectoryVisualization");
         
-        // 将容器设为 Calibration 的子对象，使可视化自动受校准影响
         if (Calibration.instance != null)
         {
             trajectoryContainer.transform.SetParent(Calibration.instance.transform);
@@ -101,71 +94,6 @@ public class ChunkVisualizer : MonoBehaviour
             trajectoryContainer.transform.SetParent(this.transform);
             Debug.LogWarning("ChunkVisualizer: Calibration instance not found! Visualization will NOT be calibrated.");
         }
-        
-        for (int i = 0; i < poolInitialSize; i++)
-        {
-            GameObject point = CreatePooledPoint();
-            point.SetActive(false);
-            pointPool.Enqueue(point);
-            
-            GameObject line = CreatePooledLine();
-            line.SetActive(false);
-            linePool.Enqueue(line);
-            
-            for (int j = 0; j < 3; j++)
-            {
-                GameObject axis = CreatePooledLine();
-                axis.SetActive(false);
-                axisPool.Enqueue(axis);
-            }
-        }
-        
-        Debug.Log($"ChunkVisualizer: Object Pool successfully initialized {poolInitialSize} points, lines, and axes.");
-    }
-    
-    GameObject CreatePooledPoint()
-    {
-        GameObject point = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        point.name = "PooledChunkPoint";
-        point.transform.SetParent(trajectoryContainer.transform);
-        point.transform.localScale = Vector3.one * pointSize;
-        
-        Renderer renderer = point.GetComponent<Renderer>();
-        renderer.material = whiteMaterial;
-        
-        // 如果启用点选择，保留Collider并添加TrajectoryPointData组件
-        if (enablePointSelection)
-        {
-            // 保留SphereCollider用于射线检测
-            SphereCollider collider = point.GetComponent<SphereCollider>();
-            if (collider != null)
-            {
-                collider.isTrigger = false;  // 确保可以被射线检测到
-            }
-            
-            // 添加TrajectoryPointData组件
-            TrajectoryPointData pointData = point.AddComponent<TrajectoryPointData>();
-            pointData.visualizer = this;
-        }
-        else
-        {
-            DestroyImmediate(point.GetComponent<Collider>());
-        }
-        
-        return point;
-    }
-    
-    GameObject CreatePooledLine()
-    {
-        GameObject line = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        line.name = "PooledChunkLine";
-        line.transform.SetParent(trajectoryContainer.transform);
-        
-        Renderer renderer = line.GetComponent<Renderer>();
-        renderer.material = whiteMaterial;
-        DestroyImmediate(line.GetComponent<Collider>());
-        
-        return line;
     }
     
     void StartReceivingData()
@@ -184,36 +112,38 @@ public class ChunkVisualizer : MonoBehaviour
             try
             {
                 byte[] receiveBytes = server.Receive(ref remoteEndPoint);
+                
                 using (MemoryStream ms = new MemoryStream(receiveBytes))
                 {
                     using (BsonReader reader = new BsonReader(ms))
                     {
-                        TrajectoryData trajectoryData = serializer.Deserialize<TrajectoryData>(reader);
-                        
-                        // Visualzation in main thread without latency
-                        UnityMainThreadDispatcher.Instance().Enqueue(() => {
-                            UpdateTrajectoryVisualization(trajectoryData);
-                        });
+                        currentTrajectoryData = serializer.Deserialize<TrajectoryData>(reader);
                     }
                 }
+                
+                // 使用主线程调度器在主线程更新可视化
+                UnityMainThreadDispatcher.Instance().Enqueue(() => UpdateTrajectoryVisualization());
             }
             catch (Exception e)
             {
-                Debug.LogError($"Action Chunk Visualizer Failed to Receive messages: {e.Message}");
+                Debug.LogWarning($"ChunkVisualizer: Error receiving trajectory - {e.Message}");
             }
         }
     }
 
-
-    void UpdateTrajectoryVisualization(TrajectoryData trajectoryData)
+    // 更新轨迹可视化（主线程调用）
+    void UpdateTrajectoryVisualization()
     {
-        if (trajectoryData == null || trajectoryData.points == null) return;
+        if (currentTrajectoryData == null || currentTrajectoryData.points == null) return;
         
-        ReturnObjectsToPool(); // return active objects to pool
+        // 清除旧的可视化
+        ClearVisualization();
         
-        List<Vector3> positions = ExtractPositions(trajectoryData.points);
-        List<Quaternion> rotations = ExtractRotations(trajectoryData.points);
+        // 提取位置和旋转
+        List<Vector3> positions = ExtractPositions(currentTrajectoryData.points);
+        List<Quaternion> rotations = ExtractRotations(currentTrajectoryData.points);
 
+        // 创建新的可视化
         CreateTrajectoryPoints(positions);
         CreateConnectionLines(positions);
         CreateCoordinateAxes(positions, rotations);
@@ -228,9 +158,7 @@ public class ChunkVisualizer : MonoBehaviour
         
         for (int i = 0; i < points.Count; i++)
         {
-            TrajectoryPoint point = points[i];
-            Vector3 position = new Vector3(point.x, point.y, point.z);
-            positions.Add(position);
+            positions.Add(new Vector3(points[i].x, points[i].y, points[i].z));
         }
         
         return positions;
@@ -242,128 +170,109 @@ public class ChunkVisualizer : MonoBehaviour
         
         for (int i = 0; i < points.Count; i++)
         {
-            TrajectoryPoint point = points[i];
-            Quaternion rotation = Quaternion.Euler(point.pitch, point.yaw, point.roll);
-            rotations.Add(rotation);
+            // 将欧拉角（roll, pitch, yaw）转换为四元数
+            // 注意：Unity的Quaternion.Euler使用的顺序是 (pitch, yaw, roll) 对应 (X, Y, Z)
+            rotations.Add(Quaternion.Euler(points[i].pitch, points[i].yaw, points[i].roll));
         }
         
         return rotations;
     }
 
-    // Create trajectory points using object pool
+    // 创建轨迹点（球体）
     void CreateTrajectoryPoints(List<Vector3> positions)
     {
         for (int i = 0; i < positions.Count; i++)
         {
-            GameObject point = GetPointFromPool();
-            // 使用 localPosition 而非 position，使其相对于父对象（Calibration）
+            GameObject point = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            point.name = $"ChunkPoint_{i}";
+            point.transform.SetParent(trajectoryContainer.transform);
             point.transform.localPosition = positions[i];
+            point.transform.localScale = Vector3.one * pointSize;
             
-            // 如果启用点选择，设置点的索引
+            Renderer renderer = point.GetComponent<Renderer>();
+            renderer.material = whiteMaterial;
+            
+            // 如果启用点选择，保留Collider并添加TrajectoryPointData组件
             if (enablePointSelection)
             {
-                TrajectoryPointData pointData = point.GetComponent<TrajectoryPointData>();
-                if (pointData != null)
+                // 保留SphereCollider用于碰撞检测
+                SphereCollider collider = point.GetComponent<SphereCollider>();
+                if (collider != null)
                 {
-                    pointData.pointIndex = i;
-                    pointData.visualizer = this;
+                    collider.isTrigger = false;
                 }
+                
+                // 添加TrajectoryPointData组件存储点的index和状态
+                TrajectoryPointData pointData = point.AddComponent<TrajectoryPointData>();
+                pointData.pointIndex = i;
+                pointData.visualizer = this;
+            }
+            else
+            {
+                // 如果不启用点选择，删除Collider节省性能
+                DestroyImmediate(point.GetComponent<Collider>());
             }
             
-            point.SetActive(true);
-            activePoints.Add(point);
+            pointObjects.Add(point);
         }
     }
     
-    // Create lines connecting trajectory points using object pool
+    // 创建连接轨迹点的线段
     void CreateConnectionLines(List<Vector3> positions)
     {
         for (int i = 0; i < positions.Count - 1; i++)
         {
-            GameObject line = GetLineFromPool();
-            SetupLine(line, positions[i], positions[i + 1], whiteMaterial, 0.5f, 1.0f);
-            line.SetActive(true);
-            activeLines.Add(line);
+            GameObject line = CreateLine(positions[i], positions[i + 1], $"ChunkLine_{i}_{i + 1}", 0.5f, 1.0f);
+            lineObjects.Add(line);
         }
     }
     
-    // Create coordinate axes at each trajectory point using object pool
+    // 创建每个轨迹点的坐标轴
     void CreateCoordinateAxes(List<Vector3> positions, List<Quaternion> rotations)
     {
         for (int i = 0; i < positions.Count; i++)
         {
-            Vector3 position = positions[i];
-            Quaternion rotation = rotations[i];
+            Vector3 localPosition = positions[i];  // 局部坐标
+            Quaternion localRotation = rotations[i];  // 局部旋转
             
-            // calculate local axis directions
-            Vector3 rightDirection = rotation * Vector3.right;
-            Vector3 upDirection = rotation * Vector3.up;
-            Vector3 forwardDirection = rotation * Vector3.forward;
+            // 关键修复：在局部空间中计算坐标轴方向
+            // 由于 position 是局部坐标，rotation 也应该是局部旋转
+            // 坐标轴方向应该在局部空间中计算
+            Vector3 rightDirection = localRotation * Vector3.right;
+            Vector3 upDirection = localRotation * Vector3.up;
+            Vector3 forwardDirection = localRotation * Vector3.forward;
             
-            // x-axis (red)
-            Vector3 xEnd = position + rightDirection * axisLength;
-            GameObject xAxis = GetAxisFromPool();
-            SetupLine(xAxis, position, xEnd, redMaterial, 0.3f, 0.5f);
-            xAxis.SetActive(true);
-            activeAxes.Add(xAxis);
+            // x轴 (红色)
+            Vector3 xEnd = localPosition + rightDirection * axisLength;
+            GameObject xAxis = CreateLine(localPosition, xEnd, $"ChunkXAxis_{i}", 0.3f, 0.5f);
+            xAxis.GetComponent<Renderer>().material = redMaterial;
+            axisObjects.Add(xAxis);
             
-            // y-axis (green)
-            Vector3 yEnd = position + upDirection * axisLength;
-            GameObject yAxis = GetAxisFromPool();
-            SetupLine(yAxis, position, yEnd, greenMaterial, 0.3f, 0.5f);
-            yAxis.SetActive(true);
-            activeAxes.Add(yAxis);
+            // y轴 (绿色)
+            Vector3 yEnd = localPosition + upDirection * axisLength;
+            GameObject yAxis = CreateLine(localPosition, yEnd, $"ChunkYAxis_{i}", 0.3f, 0.5f);
+            yAxis.GetComponent<Renderer>().material = greenMaterial;
+            axisObjects.Add(yAxis);
             
-            // z-axis (blue)
-            Vector3 zEnd = position + forwardDirection * axisLength;
-            GameObject zAxis = GetAxisFromPool();
-            SetupLine(zAxis, position, zEnd, blueMaterial, 0.3f, 0.5f);
-            zAxis.SetActive(true);
-            activeAxes.Add(zAxis);
+            // z轴 (蓝色)
+            Vector3 zEnd = localPosition + forwardDirection * axisLength;
+            GameObject zAxis = CreateLine(localPosition, zEnd, $"ChunkZAxis_{i}", 0.3f, 0.5f);
+            zAxis.GetComponent<Renderer>().material = blueMaterial;
+            axisObjects.Add(zAxis);
         }
     }
     
-    GameObject GetPointFromPool()
+    // 创建线段（使用圆柱体）
+    GameObject CreateLine(Vector3 start, Vector3 end, string name, float thicknessFactor = 1.0f, float lengthFactor = 1.0f)
     {
-        if (pointPool.Count > 0)
-        {
-            return pointPool.Dequeue();
-        }
-        else
-        {
-            return CreatePooledPoint();
-        }
-    }
-    
-    GameObject GetLineFromPool()
-    {
-        if (linePool.Count > 0)
-        {
-            return linePool.Dequeue();
-        }
-        else
-        {
-            return CreatePooledLine();
-        }
-    }
-    
-    GameObject GetAxisFromPool()
-    {
-        if (axisPool.Count > 0)
-        {
-            return axisPool.Dequeue();
-        }
-        else
-        {
-            return CreatePooledLine();
-        }
-    }
-    
-    void SetupLine(GameObject line, Vector3 start, Vector3 end, Material material, float thicknessFactor = 1.0f, float lengthFactor = 1.0f)
-    {
+        GameObject line = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        line.name = name;
+        line.transform.SetParent(trajectoryContainer.transform);
+        
         Vector3 direction = end - start;
         float originalLength = direction.magnitude;
-    
+        
+        // 应用长度系数
         float scaledLength = originalLength * lengthFactor;
         Vector3 scaledEnd = start + direction.normalized * scaledLength;
         Vector3 center = (start + scaledEnd) / 2f;
@@ -373,46 +282,46 @@ public class ChunkVisualizer : MonoBehaviour
         line.transform.localRotation = Quaternion.LookRotation(direction);
         line.transform.Rotate(90, 0, 0);
         
+        // 应用厚度系数
         float thickness = lineWidth * thicknessFactor;
         line.transform.localScale = new Vector3(thickness * 2f, scaledLength / 2f, thickness * 2f);
         
         Renderer renderer = line.GetComponent<Renderer>();
-        renderer.material = material;
-    }
-    
-    void ReturnObjectsToPool()
-    {
-        foreach (GameObject point in activePoints)
-        {
-            point.SetActive(false);
-            pointPool.Enqueue(point);
-        }
-        activePoints.Clear();
+        renderer.material = whiteMaterial;
+        DestroyImmediate(line.GetComponent<Collider>());
         
-        foreach (GameObject line in activeLines)
-        {
-            line.SetActive(false);
-            linePool.Enqueue(line);
-        }
-        activeLines.Clear();
-        
-        foreach (GameObject axis in activeAxes)
-        {
-            axis.SetActive(false);
-            axisPool.Enqueue(axis);
-        }
-        activeAxes.Clear();
+        return line;
     }
     
     void ClearVisualization()
     {
-        ReturnObjectsToPool();
+        if (trajectoryContainer != null)
+        {
+            // 直接销毁所有子对象
+            foreach (GameObject point in pointObjects)
+            {
+                Destroy(point);
+            }
+            pointObjects.Clear();
+            
+            foreach (GameObject line in lineObjects)
+            {
+                Destroy(line);
+            }
+            lineObjects.Clear();
+            
+            foreach (GameObject axis in axisObjects)
+            {
+                Destroy(axis);
+            }
+            axisObjects.Clear();
+        }
     }
     
     // 通过索引设置点的悬停状态（用于VRController）
     public void SetPointHovered(int pointIndex, bool isHovered)
     {
-        if (pointIndex < 0 || pointIndex >= activePoints.Count) return;
+        if (pointIndex < 0 || pointIndex >= pointObjects.Count) return;
         
         // 更新状态记录
         if (isHovered)
@@ -424,7 +333,7 @@ public class ChunkVisualizer : MonoBehaviour
             currentHoveredPointIndex = -1;
         }
         
-        TrajectoryPointData pointData = activePoints[pointIndex].GetComponent<TrajectoryPointData>();
+        TrajectoryPointData pointData = pointObjects[pointIndex].GetComponent<TrajectoryPointData>();
         if (pointData != null)
         {
             pointData.SetHovered(isHovered);
@@ -434,7 +343,7 @@ public class ChunkVisualizer : MonoBehaviour
     // 通过索引设置点的选中状态（用于VRController）
     public void SetPointSelected(int pointIndex, bool isSelected)
     {
-        if (pointIndex < 0 || pointIndex >= activePoints.Count) return;
+        if (pointIndex < 0 || pointIndex >= pointObjects.Count) return;
         
         // 更新状态记录
         if (isSelected)
@@ -446,44 +355,40 @@ public class ChunkVisualizer : MonoBehaviour
             currentSelectedPointIndex = -1;
         }
         
-        TrajectoryPointData pointData = activePoints[pointIndex].GetComponent<TrajectoryPointData>();
+        TrajectoryPointData pointData = pointObjects[pointIndex].GetComponent<TrajectoryPointData>();
         if (pointData != null)
         {
             pointData.SetSelected(isSelected);
         }
     }
     
-    // 新增：恢复点的选中和悬停状态（轨迹更新后调用）
+    // 恢复点的选中和悬停状态（轨迹更新后调用）
     void RestorePointStates()
     {
         // 恢复选中状态
-        if (currentSelectedPointIndex >= 0 && currentSelectedPointIndex < activePoints.Count)
+        if (currentSelectedPointIndex >= 0 && currentSelectedPointIndex < pointObjects.Count)
         {
-            TrajectoryPointData pointData = activePoints[currentSelectedPointIndex].GetComponent<TrajectoryPointData>();
+            TrajectoryPointData pointData = pointObjects[currentSelectedPointIndex].GetComponent<TrajectoryPointData>();
             if (pointData != null)
             {
-                pointData.pointIndex = currentSelectedPointIndex;
-                pointData.visualizer = this;
                 pointData.SetSelected(true);
             }
         }
         
         // 恢复悬停状态（只在未选中时生效）
         if (currentHoveredPointIndex >= 0 && 
-            currentHoveredPointIndex < activePoints.Count &&
+            currentHoveredPointIndex < pointObjects.Count &&
             currentHoveredPointIndex != currentSelectedPointIndex)
         {
-            TrajectoryPointData pointData = activePoints[currentHoveredPointIndex].GetComponent<TrajectoryPointData>();
+            TrajectoryPointData pointData = pointObjects[currentHoveredPointIndex].GetComponent<TrajectoryPointData>();
             if (pointData != null)
             {
-                pointData.pointIndex = currentHoveredPointIndex;
-                pointData.visualizer = this;
                 pointData.SetHovered(true);
             }
         }
     }
     
-    // 清除所有选中/悬停状态（可选，用于重置）
+    // 清除所有选中/悬停状态
     public void ClearAllStates()
     {
         currentSelectedPointIndex = -1;
@@ -500,11 +405,10 @@ public class ChunkVisualizer : MonoBehaviour
         {
             server.Close();
         }
-        ClearVisualization();
         
         if (trajectoryContainer != null)
         {
-            DestroyImmediate(trajectoryContainer);
+            Destroy(trajectoryContainer);
         }
     }
 }

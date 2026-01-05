@@ -3,6 +3,7 @@ using UnityEngine;
 using System.Threading.Tasks;
 using System.Text;
 using System.Net.Http;
+using System.Collections;
 
 [Serializable]
 public class TrajectoryEditMessage
@@ -35,165 +36,175 @@ public class TrajectoryEditMessage
     }
 }
 
+/// <summary>
+/// 简化版 Message - 仅包含 timestamp 和 trajectory edit 信息
+/// </summary>
 [Serializable]
-public class HandMessage
-{
-    public float[] wristPos;
-    public float[] wristQuat;
-    public float triggerState;
-    public bool[] buttonState;
-    public HandMessage()
-    {
-        wristPos = new float[3]; //position of the hand
-        wristQuat = new float[4]; //quaternion of the hand
-        buttonState = new bool[5]; //buttonState of B(Y)/A(X)/Thumbstick/IndexTrigger/HandTrigger
-    }
-
-    public void TransformToAlignSpace()
-    {
-        if (Calibration.instance)
-        {
-            Vector3 vector3 = Calibration.instance.GetPosition(new Vector3(wristPos[0], wristPos[1], wristPos[2])); // worldPos
-            wristPos[0] = vector3.x;
-            wristPos[1] = vector3.y;
-            wristPos[2] = vector3.z;
-            Quaternion quaternion = Calibration.instance.GetRotation(new Quaternion(wristQuat[1], wristQuat[2], wristQuat[3], wristQuat[0]));
-            wristQuat[0] = quaternion.w;
-            wristQuat[1] = quaternion.x;
-            wristQuat[2] = quaternion.y;
-            wristQuat[3] = quaternion.z;
-        }
-    }
-}
-
-[Serializable]
-public class Message
+public class HandEditMessage
 {
     public float timestamp;
-    public HandMessage rightHand;
-    public HandMessage leftHand;
-    public float[] headPos;
-    public float[] headQuat;
-    public TrajectoryEditMessage trajectoryEdit;  // 新增轨迹编辑信息
+    public TrajectoryEditMessage trajectoryEdit;
     
-    public Message()
+    public HandEditMessage()
     {
-        timestamp = Time.time;
-        headPos = new float[3];
-        headQuat = new float[4];
-        rightHand = new HandMessage();
-        leftHand = new HandMessage();
-        trajectoryEdit = new TrajectoryEditMessage();  // 初始化
+        timestamp = 0f;
+        trajectoryEdit = new TrajectoryEditMessage();
     }
-
-    // Transform the head and hand poses to the calibrated align space
+    
     public void TransformToAlignSpace()
     {
         if (Calibration.instance)
         {
-            Vector3 vector3 = Calibration.instance.GetPosition(new Vector3(headPos[0], headPos[1], headPos[2]));
-            headPos[0] = vector3.x;
-            headPos[1] = vector3.y;
-            headPos[2] = vector3.z;
-            Quaternion quaternion = Calibration.instance.GetRotation(new Quaternion(headQuat[1], headQuat[2], headQuat[3], headQuat[0]));
-            headQuat[0] = quaternion.w;
-            headQuat[1] = quaternion.x;
-            headQuat[2] = quaternion.y;
-            headQuat[3] = quaternion.z;
-
-            rightHand.TransformToAlignSpace();
-            leftHand.TransformToAlignSpace();
-            trajectoryEdit.TransformToAlignSpace();  // 转换轨迹编辑数据
+            trajectoryEdit.TransformToAlignSpace();
         }
     }
 }
 
-/*
-Component for collecting the poses and commands of the VR controller 
-and sending to the worksation via HTTP.
-*/
-
+/// <summary>
+/// 手势控制的轨迹编辑器 - 碰撞检测版本
+/// 使用 OVRHand 物理碰撞来选择和拖动轨迹点（而非射线）
+/// </summary>
 public class VRController : MonoBehaviour
 {
     public static VRController instance;
+    
+    [Header("网络设置")]
     public string ip; // The default IP of the workstation
     public int port; // The default port of the workstation
     HttpClient client = new HttpClient();
     public int Hz = 30; // The frequency at which the VR controller pose data is sent to the workstation
 
-    public TMPro.TextMeshProUGUI showText;
-
-    public MyKeyboard keyboard;
+    [Header("手部跟踪")]
+    public OVRHand rightHand;  // 右手 OVRHand 组件
+    public OVRHand leftHand;   // 左手 OVRHand 组件
     
+    [Header("控制器（用于按键操作）")]
+    public Transform controller_right;  // 右手控制器（保留用于按键）
+    public Transform controller_left;   // 左手控制器（保留用于按键）
+    
+    [Header("场景引用")]
+    public TMPro.TextMeshProUGUI showText;
+    public MyKeyboard keyboard;
     public ChunkVisualizer chunkVisualizer; // action chunk visualization component
     public Transform ovrhead;
-
-    public Transform controller_right;
-    public Transform controller_left;
     
-    [Header("射线选择设置")]
-    public bool enableRaySelection = true;
-    public float rayLength = 10.0f;
-    public Color rayColor = Color.green;
-    public Color rayHitColor = Color.red;
-    public LayerMask raycastMask = ~0;  // 默认检测所有层
+    [Header("碰撞检测设置")]
+    public bool enableCollisionDetection = true;
+    public Transform indexFingerTip;  // 食指尖端 Transform（从 OVRSkeleton 获取）
+    public float collisionRadius = 0.02f;  // 碰撞检测半径
+    public LayerMask collisionMask = ~0;  // 碰撞检测层
     
-    private LineRenderer leftRay;
-    private LineRenderer rightRay;
+    [Header("捏合手势设置")]
+    public float pinchThreshold = 0.7f;  // 捏合强度阈值（0-1）
+    public float releaseThreshold = 0.3f; // 松开阈值
     
-    // 改进：只维护状态值，不维护GameObject引用
-    private int hoveredPointIndex = -1;  // -1表示没有悬停
-    private int selectedPointIndex = -1;  // -1表示没有选中
+    [Header("可视化调试")]
+    public bool showDebugSphere = true;  // 是否显示调试球体
+    public Color debugSphereColor = Color.green;
+    
+    private GameObject debugSphere;  // 调试用的碰撞检测球体
+    private int hoveredPointIndex = -1;
+    private int selectedPointIndex = -1;
     private bool isEditingTrajectory = false;
+    private bool wasPinching = false;  // 上一帧是否在捏合
 
-    public static Message message;
+    private HandEditMessage message;
     public bool LRinverse = false;
+    
+    bool calibrationMode = false;
+    bool cold = false;
 
     protected void Start()
     {
         instance = this;
         showText.transform.parent.GetChild(1).GetComponent<TMPro.TextMeshProUGUI>().text = ip;
-        message = new Message();
+        message = new HandEditMessage();
         Time.fixedDeltaTime = 1f / Hz;
         
-        // 初始化射线可视化
-        InitializeRays();
+        // 初始化碰撞检测
+        InitializeCollisionDetection();
     }
     
-    void InitializeRays()
+    /// <summary>
+    /// 初始化碰撞检测系统
+    /// 关键：创建一个跟随食指尖端的触发器球体
+    /// </summary>
+    void InitializeCollisionDetection()
     {
-        // 左手射线
-        GameObject leftRayGO = new GameObject("LeftControllerRay");
-        leftRayGO.transform.SetParent(controller_left);
-        leftRay = leftRayGO.AddComponent<LineRenderer>();
-        ConfigureRay(leftRay);
-        leftRay.enabled = false;  // 暂时不启用左手射线
+        // 尝试自动查找食指尖端
+        if (indexFingerTip == null && rightHand != null)
+        {
+            OVRSkeleton skeleton = rightHand.GetComponent<OVRSkeleton>();
+            if (skeleton != null)
+            {
+                // 等待骨骼初始化
+                StartCoroutine(WaitForSkeletonInit(skeleton));
+            }
+            else
+            {
+                Debug.LogError("VRController: 未找到 OVRSkeleton 组件！");
+            }
+        }
         
-        // 右手射线
-        GameObject rightRayGO = new GameObject("RightControllerRay");
-        rightRayGO.transform.SetParent(controller_right);
-        rightRay = rightRayGO.AddComponent<LineRenderer>();
-        ConfigureRay(rightRay);
+        // 创建调试球体
+        if (showDebugSphere)
+        {
+            debugSphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            debugSphere.name = "IndexFingerCollisionDebug";
+            debugSphere.transform.localScale = Vector3.one * collisionRadius * 2f;
+            
+            // 设置为半透明材质
+            Renderer renderer = debugSphere.GetComponent<Renderer>();
+            Material mat = new Material(Shader.Find("Standard"));
+            mat.color = new Color(debugSphereColor.r, debugSphereColor.g, debugSphereColor.b, 0.3f);
+            mat.SetFloat("_Mode", 3); // Transparent mode
+            mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            mat.SetInt("_ZWrite", 0);
+            mat.DisableKeyword("_ALPHATEST_ON");
+            mat.EnableKeyword("_ALPHABLEND_ON");
+            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            mat.renderQueue = 3000;
+            renderer.material = mat;
+            
+            // 移除默认的 Collider（我们用 Physics.OverlapSphere）
+            DestroyImmediate(debugSphere.GetComponent<Collider>());
+        }
     }
     
-    void ConfigureRay(LineRenderer ray)
+    /// <summary>
+    /// 等待 OVRSkeleton 初始化完成
+    /// OVRSkeleton 需要几帧才能完成骨骼数据加载
+    /// </summary>
+    IEnumerator WaitForSkeletonInit(OVRSkeleton skeleton)
     {
-        ray.startWidth = 0.002f;
-        ray.endWidth = 0.002f;
-        ray.material = new Material(Shader.Find("Sprites/Default"));
-        ray.startColor = rayColor;
-        ray.endColor = rayColor;
-        ray.positionCount = 2;
-        ray.enabled = enableRaySelection;
+        // 等待骨骼初始化
+        while (!skeleton.IsInitialized)
+        {
+            yield return null;
+        }
+        
+        // 查找食指尖端骨骼
+        foreach (var bone in skeleton.Bones)
+        {
+            if (bone.Id == OVRSkeleton.BoneId.Hand_IndexTip)
+            {
+                indexFingerTip = bone.Transform;
+                Debug.Log("VRController: 成功找到食指尖端骨骼");
+                break;
+            }
+        }
+        
+        if (indexFingerTip == null)
+        {
+            Debug.LogError("VRController: 无法找到食指尖端骨骼！");
+        }
     }
 
     private void FixedUpdate()
     {
         CollectAndSend();
     }
-
-    bool calibrationMode = false;
-    bool cold = false;
 
     // Toggle calibration mode safely with a cooldown
     async void SwitchMode()
@@ -206,123 +217,166 @@ public class VRController : MonoBehaviour
         cold = false;
     }
 
-    /* 已禁用 - ClearImage 功能
-    async void ClearImage()
-    {
-        if (cold) return;
-        cold = true;
-        VisualizationServer.instance.ClearImage();
-        await Task.Delay(500);
-        cold = false;
-    }
-    */
-
     public void Update()
     {
-        keyboard.transform.position = controller_right.position - new Vector3(0, 0.2f, 0);
-        keyboard.transform.LookAt(Camera.main.transform);
+        // 键盘位置更新（使用控制器位置）
+        if (keyboard != null && controller_right != null)
+        {
+            keyboard.transform.position = controller_right.position - new Vector3(0, 0.2f, 0);
+            keyboard.transform.LookAt(Camera.main.transform);
+        }
 
-        // switch between calibration mode and normal mode with long press of A+X buttons
+        // === 保留的控制器按键操作 ===
+        
+        // X + A: 切换校准模式
         if (OVRInput.Get(OVRInput.RawButton.X) && OVRInput.Get(OVRInput.RawButton.A))
         {
             SwitchMode();
         }
-
-        /* 已禁用 - 清除图像功能
-        // clear all images on the workstation with long press of B+Y buttons
-        if (OVRInput.Get(OVRInput.RawButton.Y) && OVRInput.Get(OVRInput.RawButton.B))
-        {
-            ClearImage();
-        }
-        */
         
         if (calibrationMode) return;
 
-        // Toggle the keyboard display with left hand controller's thumbstick press
+        // 左手摇杆: 切换键盘
         if (OVRInput.GetDown(OVRInput.RawButton.LThumbstick))
         {
-            keyboard.gameObject.SetActive(!keyboard.gameObject.activeSelf);
+            if (keyboard != null)
+            {
+                keyboard.gameObject.SetActive(!keyboard.gameObject.activeSelf);
+            }
         }
         
-        // 射线选择逻辑
-        if (enableRaySelection)
+        // === 手势控制的轨迹编辑（碰撞检测版本） ===
+        
+        if (rightHand != null && rightHand.IsDataValid && enableCollisionDetection)
         {
-            UpdateRaySelection();
+            UpdateCollisionDetection();
+            HandlePinchGesture();
         }
         
-        // 轨迹编辑模式控制 - 右手扳机
-        if (OVRInput.GetDown(OVRInput.RawButton.RIndexTrigger))
-        {
-            HandleTrajectorySelection();
-        }
-        
-        // 按住扳机时更新轨迹点位置（在FixedUpdate的CollectAndSend中发送）
-        if (OVRInput.Get(OVRInput.RawButton.RIndexTrigger) && isEditingTrajectory)
+        // 更新编辑数据
+        if (isEditingTrajectory && rightHand != null)
         {
             UpdateTrajectoryEditData();
         }
-        
-        // 松开扳机停止编辑
-        if (OVRInput.GetUp(OVRInput.RawButton.RIndexTrigger))
-        {
-            StopTrajectoryEditing();
-        }
     }
 
-    void UpdateRaySelection()
+    /// <summary>
+    /// 核心方法：使用物理碰撞检测与轨迹点的接触
+    /// 关键实现：使用 Physics.OverlapSphere 检测食指尖端附近的碰撞体
+    /// </summary>
+    void UpdateCollisionDetection()
     {
-        // 右手控制器射线检测
-        Ray ray = new Ray(controller_right.position, controller_right.forward);
-        RaycastHit hit;
+        // 检查食指尖端是否可用
+        if (indexFingerTip == null)
+        {
+            if (debugSphere != null) debugSphere.SetActive(false);
+            return;
+        }
+
+        // 更新调试球体位置
+        if (debugSphere != null)
+        {
+            debugSphere.SetActive(true);
+            debugSphere.transform.position = indexFingerTip.position;
+        }
         
-        // 清除之前的悬停状态（通过ChunkVisualizer更新视觉）
+        // 没有碰撞，清除悬停状态
         if (hoveredPointIndex >= 0 && chunkVisualizer != null)
         {
             chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
             hoveredPointIndex = -1;
         }
         
-        if (Physics.Raycast(ray, out hit, rayLength, raycastMask))
+        // 核心：使用 Physics.OverlapSphere 检测碰撞
+        // 在食指尖端位置创建一个球形检测区域
+        Collider[] hitColliders = Physics.OverlapSphere(
+            indexFingerTip.position,
+            collisionRadius,
+            collisionMask
+        );
+        
+        // 遍历所有碰撞的对象，找到最近的轨迹点
+        TrajectoryPointData closestPoint = null;
+        float closestDistance = float.MaxValue;
+        
+        foreach (Collider col in hitColliders)
         {
-            // 检查是否击中轨迹点
-            TrajectoryPointData pointData = hit.collider.GetComponent<TrajectoryPointData>();
+            TrajectoryPointData pointData = col.GetComponent<TrajectoryPointData>();
             if (pointData != null)
             {
-                hoveredPointIndex = pointData.pointIndex;
-                if (chunkVisualizer != null)
+                // 计算距离，选择最近的点
+                float distance = Vector3.Distance(indexFingerTip.position, col.transform.position);
+                if (distance < closestDistance)
                 {
-                    chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+                    closestDistance = distance;
+                    closestPoint = pointData;
                 }
-                
-                // 更新射线颜色
-                rightRay.startColor = rayHitColor;
-                rightRay.endColor = rayHitColor;
-                
-                // 更新射线终点到击中点
-                rightRay.SetPosition(0, controller_right.position);
-                rightRay.SetPosition(1, hit.point);
-                return;
             }
         }
         
-        // 未击中任何点，显示完整射线
-        rightRay.startColor = rayColor;
-        rightRay.endColor = rayColor;
-        rightRay.SetPosition(0, controller_right.position);
-        rightRay.SetPosition(1, controller_right.position + controller_right.forward * rayLength);
+        // 如果找到了碰撞的点，设置为悬停状态
+        if (closestPoint != null)
+        {
+            hoveredPointIndex = closestPoint.pointIndex;
+            if (chunkVisualizer != null)
+            {
+                chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+            }
+            
+            // 调试球体变红表示接触
+            if (debugSphere != null)
+            {
+                debugSphere.GetComponent<Renderer>().material.color = 
+                    new Color(1f, 0f, 0f, 0.5f);  // 红色半透明
+            }
+        }
+        else
+        {
+            // 没有接触，恢复绿色
+            if (debugSphere != null)
+            {
+                debugSphere.GetComponent<Renderer>().material.color = 
+                    new Color(debugSphereColor.r, debugSphereColor.g, debugSphereColor.b, 0.3f);
+            }
+        }
     }
     
+    /// <summary>
+    /// 处理捏合手势（逻辑与 VRHandController 相同）
+    /// </summary>
+    void HandlePinchGesture()
+    {
+        float pinchStrength = rightHand.GetFingerPinchStrength(OVRHand.HandFinger.Index);
+        
+        bool isPinchingNow = wasPinching ? 
+            (pinchStrength > releaseThreshold) :
+            (pinchStrength > pinchThreshold);
+        
+        if (isPinchingNow && !wasPinching)
+        {
+            HandleTrajectorySelection();
+        }
+        
+        if (!isPinchingNow && wasPinching)
+        {
+            StopTrajectoryEditing();
+        }
+        
+        wasPinching = isPinchingNow;
+    }
+    
+    /// <summary>
+    /// 选中轨迹点（捏合开始时触发）
+    /// </summary>
     void HandleTrajectorySelection()
     {
         if (hoveredPointIndex >= 0)
         {
-            // 取消之前选中的点（如果有）
             if (selectedPointIndex >= 0 && selectedPointIndex != hoveredPointIndex && chunkVisualizer != null)
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, false);
             }
             
-            // 选中新点
             selectedPointIndex = hoveredPointIndex;
             if (chunkVisualizer != null)
             {
@@ -330,35 +384,48 @@ public class VRController : MonoBehaviour
             }
             isEditingTrajectory = true;
             
-            Debug.Log($"选中轨迹点: {selectedPointIndex}");
+            Debug.Log($"[手势] 选中轨迹点: {selectedPointIndex}");
         }
     }
     
+    /// <summary>
+    /// 更新轨迹编辑数据
+    /// 关键：使用食指尖端的位置，而非 PointerPose
+    /// </summary>
     void UpdateTrajectoryEditData()
     {
-        if (selectedPointIndex >= 0)
+        if (selectedPointIndex >= 0 && indexFingerTip != null)
         {
-            // 更新Message中的编辑信息（原始VR空间坐标）
             message.trajectoryEdit.isEditing = true;
             message.trajectoryEdit.selectedPointIndex = selectedPointIndex;
             
-            // 记录控制器位姿（原始坐标，稍后在CollectAndSend中通过TransformToAlignSpace转换）
-            message.trajectoryEdit.editedPointPos[0] = controller_right.position.x;
-            message.trajectoryEdit.editedPointPos[1] = controller_right.position.y;
-            message.trajectoryEdit.editedPointPos[2] = controller_right.position.z;
+            // 使用食指尖端的位姿（原始 VR 空间坐标）
+            Vector3 pos = indexFingerTip.position;
+            Quaternion rot = indexFingerTip.rotation;
             
-            message.trajectoryEdit.editedPointQuat[0] = controller_right.rotation.w;
-            message.trajectoryEdit.editedPointQuat[1] = controller_right.rotation.x;
-            message.trajectoryEdit.editedPointQuat[2] = controller_right.rotation.y;
-            message.trajectoryEdit.editedPointQuat[3] = controller_right.rotation.z;
+            message.trajectoryEdit.editedPointPos[0] = pos.x;
+            message.trajectoryEdit.editedPointPos[1] = pos.y;
+            message.trajectoryEdit.editedPointPos[2] = pos.z;
+            
+            message.trajectoryEdit.editedPointQuat[0] = rot.w;
+            message.trajectoryEdit.editedPointQuat[1] = rot.x;
+            message.trajectoryEdit.editedPointQuat[2] = rot.y;
+            message.trajectoryEdit.editedPointQuat[3] = rot.z;
         }
     }
     
+    /// <summary>
+    /// 停止轨迹编辑（松开捏合时触发）
+    /// </summary>
     void StopTrajectoryEditing()
     {
+        isEditingTrajectory = false;
+        message.trajectoryEdit.isEditing = false;
+        message.trajectoryEdit.selectedPointIndex = -1;
+        
         if (selectedPointIndex >= 0)
         {
-            Debug.Log($"停止编辑轨迹点: {selectedPointIndex}");
+            Debug.Log($"[手势] 停止编辑点 {selectedPointIndex}，取消选中");
             
             // 取消选中状态，点变回白色
             if (chunkVisualizer != null)
@@ -366,69 +433,19 @@ public class VRController : MonoBehaviour
                 chunkVisualizer.SetPointSelected(selectedPointIndex, false);
             }
             
-            // 清除编辑状态和选中索引
-            message.trajectoryEdit.isEditing = false;
-            message.trajectoryEdit.selectedPointIndex = -1;
-            isEditingTrajectory = false;
-            selectedPointIndex = -1; 
+            // 清除选中索引
+            selectedPointIndex = -1;
         }
     }
 
+    /// <summary>
+    /// 收集并发送数据（仅发送 timestamp 和 trajectoryEdit）
+    /// </summary>
     public void CollectAndSend()
     {
-        message.rightHand.wristPos[0] = controller_right.position.x;
-        message.rightHand.wristPos[1] = controller_right.position.y;
-        message.rightHand.wristPos[2] = controller_right.position.z;
-
-        message.rightHand.wristQuat[0] = controller_right.rotation.w;
-        message.rightHand.wristQuat[1] = controller_right.rotation.x;
-        message.rightHand.wristQuat[2] = controller_right.rotation.y;
-        message.rightHand.wristQuat[3] = controller_right.rotation.z;
-
-        message.leftHand.wristPos[0] = controller_left.position.x;
-        message.leftHand.wristPos[1] = controller_left.position.y;
-        message.leftHand.wristPos[2] = controller_left.position.z;
-
-        message.leftHand.wristQuat[0] = controller_left.rotation.w;
-        message.leftHand.wristQuat[1] = controller_left.rotation.x;
-        message.leftHand.wristQuat[2] = controller_left.rotation.y;
-        message.leftHand.wristQuat[3] = controller_left.rotation.z;
-
-        message.leftHand.triggerState = OVRInput.Get(OVRInput.Axis1D.PrimaryIndexTrigger);
-        message.rightHand.triggerState = OVRInput.Get(OVRInput.Axis1D.SecondaryIndexTrigger);
-
-        message.leftHand.buttonState[0] = OVRInput.Get(OVRInput.RawButton.Y);
-        message.leftHand.buttonState[1] = OVRInput.Get(OVRInput.RawButton.X);
-        message.leftHand.buttonState[2] = OVRInput.Get(OVRInput.RawButton.LThumbstick);
-        message.leftHand.buttonState[3] = OVRInput.Get(OVRInput.RawButton.LIndexTrigger);
-        message.leftHand.buttonState[4] = OVRInput.Get(OVRInput.RawButton.LHandTrigger);
-
-        message.rightHand.buttonState[0] = OVRInput.Get(OVRInput.RawButton.B);
-        message.rightHand.buttonState[1] = OVRInput.Get(OVRInput.RawButton.A);
-        message.rightHand.buttonState[2] = OVRInput.Get(OVRInput.RawButton.RThumbstick);
-        message.rightHand.buttonState[3] = OVRInput.Get(OVRInput.RawButton.RIndexTrigger);
-        message.rightHand.buttonState[4] = OVRInput.Get(OVRInput.RawButton.RHandTrigger);
-
-        if (LRinverse)
-        {
-            var temp = message.leftHand;
-            message.leftHand = message.rightHand;
-            message.rightHand = temp;
-        }
-
-        message.headPos[0] = ovrhead.position.x;
-        message.headPos[1] = ovrhead.position.y;
-        message.headPos[2] = ovrhead.position.z;
-        message.headQuat[0] = ovrhead.rotation.w;
-        message.headQuat[1] = ovrhead.rotation.x;
-        message.headQuat[2] = ovrhead.rotation.y;
-        message.headQuat[3] = ovrhead.rotation.z;
-
         message.timestamp = Time.time;
-
-        //transform to align space
         message.TransformToAlignSpace();
-
+        
         string mes = JsonUtility.ToJson(message);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(mes);
         string url = $"http://{ip}:{port}/unity";
@@ -439,5 +456,13 @@ public class VRController : MonoBehaviour
     public void RefreshIP(string ip)
     {
         this.ip = ip;
+    }
+    
+    void OnDestroy()
+    {
+        if (debugSphere != null)
+        {
+            DestroyImmediate(debugSphere);
+        }
     }
 }
