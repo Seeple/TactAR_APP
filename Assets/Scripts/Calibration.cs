@@ -67,10 +67,10 @@ public class Calibration : MonoBehaviour
 
 
 
-    public Vector3 GetPosition(Vector3 worldPosition)
-    {
-        return transform.TransformPoint(worldPosition);
-    }
+    // public Vector3 GetPosition(Vector3 worldPosition)
+    // {
+    //     return transform.TransformPoint(worldPosition);
+    // }
 
     public Vector3 GetEuler(Vector3 worldEuler)
     {
@@ -80,5 +80,10 @@ public class Calibration : MonoBehaviour
     public Quaternion GetRotation(Quaternion worldEuler)
     {
         return Quaternion.Inverse(transform.rotation) * worldEuler;
+    }
+
+    public Vector3 GetPosition(Vector3 worldPosition)
+    {
+        return transform.InverseTransformPoint(worldPosition);
     }
 }

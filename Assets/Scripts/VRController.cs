@@ -5,10 +5,39 @@ using System.Text;
 using System.Net.Http;
 using System.Collections;
 
+// Matches HandMes on the workstation side
+[Serializable]
+public class HandMessage
+{
+    public float[] wristPos;   // (x, y, z)
+    public float[] wristQuat;  // (w, qx, qy, qz)
+    public float triggerState;
+    public bool[] buttonState; // (B/Y, A/X, joystick, trigger, side_trigger)
+
+    public HandMessage()
+    {
+        wristPos = new float[3];
+        wristQuat = new float[4];
+        buttonState = new bool[5];
+    }
+
+    public void TransformToAlignSpace()
+    {
+        if (Calibration.instance)
+        {
+            Vector3 p = Calibration.instance.GetPosition(new Vector3(wristPos[0], wristPos[1], wristPos[2]));
+            wristPos[0] = p.x; wristPos[1] = p.y; wristPos[2] = p.z;
+            Quaternion q = Calibration.instance.GetRotation(new Quaternion(wristQuat[1], wristQuat[2], wristQuat[3], wristQuat[0]));
+            wristQuat[0] = q.w; wristQuat[1] = q.x; wristQuat[2] = q.y; wristQuat[3] = q.z;
+        }
+    }
+}
+
+// Matches TrajectoryEdit on the workstation side
 [Serializable]
 public class TrajectoryEditMessage
 {
-    public int selectedPointIndex = -1;  // -1表示没有选中任何点
+    public int selectedPointIndex = -1;
     public bool isEditing = false;
     public float[] editedPointPos;
     public float[] editedPointQuat;
@@ -19,42 +48,52 @@ public class TrajectoryEditMessage
         editedPointQuat = new float[4];
     }
     
+    // Convert world-space pose to Calibration local space before sending
     public void TransformToAlignSpace()
     {
         if (Calibration.instance && isEditing)
         {
-            Vector3 vector3 = Calibration.instance.GetPosition(new Vector3(editedPointPos[0], editedPointPos[1], editedPointPos[2]));
-            editedPointPos[0] = vector3.x;
-            editedPointPos[1] = vector3.y;
-            editedPointPos[2] = vector3.z;
-            Quaternion quaternion = Calibration.instance.GetRotation(new Quaternion(editedPointQuat[1], editedPointQuat[2], editedPointQuat[3], editedPointQuat[0]));
-            editedPointQuat[0] = quaternion.w;
-            editedPointQuat[1] = quaternion.x;
-            editedPointQuat[2] = quaternion.y;
-            editedPointQuat[3] = quaternion.z;
+            Vector3 p = Calibration.instance.GetPosition(new Vector3(editedPointPos[0], editedPointPos[1], editedPointPos[2]));
+            editedPointPos[0] = p.x; editedPointPos[1] = p.y; editedPointPos[2] = p.z;
+            Quaternion q = Calibration.instance.GetRotation(new Quaternion(editedPointQuat[1], editedPointQuat[2], editedPointQuat[3], editedPointQuat[0]));
+            editedPointQuat[0] = q.w; editedPointQuat[1] = q.x; editedPointQuat[2] = q.y; editedPointQuat[3] = q.z;
         }
     }
 }
 
-/// <summary>
-/// 简化版 Message - 仅包含 timestamp 和 trajectory edit 信息
-/// </summary>
+// Matches UnityMes on the workstation side
 [Serializable]
 public class HandEditMessage
 {
     public float timestamp;
+    public HandMessage leftHand;
+    public HandMessage rightHand;
+    public float[] headPos;   // (x, y, z)
+    public float[] headQuat;  // (w, qx, qy, qz)
     public TrajectoryEditMessage trajectoryEdit;
     
     public HandEditMessage()
     {
         timestamp = 0f;
+        headPos = new float[3];
+        headQuat = new float[4];
+        leftHand = new HandMessage();
+        rightHand = new HandMessage();
         trajectoryEdit = new TrajectoryEditMessage();
     }
     
+    // Convert all world-space poses to Calibration local space
     public void TransformToAlignSpace()
     {
         if (Calibration.instance)
         {
+            Vector3 hp = Calibration.instance.GetPosition(new Vector3(headPos[0], headPos[1], headPos[2]));
+            headPos[0] = hp.x; headPos[1] = hp.y; headPos[2] = hp.z;
+            Quaternion hq = Calibration.instance.GetRotation(new Quaternion(headQuat[1], headQuat[2], headQuat[3], headQuat[0]));
+            headQuat[0] = hq.w; headQuat[1] = hq.x; headQuat[2] = hq.y; headQuat[3] = hq.z;
+
+            leftHand.TransformToAlignSpace();
+            rightHand.TransformToAlignSpace();
             trajectoryEdit.TransformToAlignSpace();
         }
     }
@@ -95,8 +134,8 @@ public class VRController : MonoBehaviour
     public LayerMask collisionMask = ~0;  // 碰撞检测层
     
     [Header("捏合手势设置")]
-    public float pinchThreshold = 0.7f;  // 捏合强度阈值（0-1）
-    public float releaseThreshold = 0.3f; // 松开阈值
+    public float pinchThreshold = 0.85f;  // 捏合强度阈值（0-1）
+    public float releaseThreshold = 0.5f; // 松开阈值
     
     [Header("可视化调试")]
     public bool showDebugSphere = true;  // 是否显示调试球体
@@ -438,14 +477,64 @@ public class VRController : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// 收集并发送数据（仅发送 timestamp 和 trajectoryEdit）
-    /// </summary>
+    // Collect all pose/button data and send to workstation at fixed Hz
     public void CollectAndSend()
     {
         message.timestamp = Time.time;
+
+        // Head pose
+        if (ovrhead != null)
+        {
+            message.headPos[0] = ovrhead.position.x;
+            message.headPos[1] = ovrhead.position.y;
+            message.headPos[2] = ovrhead.position.z;
+            message.headQuat[0] = ovrhead.rotation.w;
+            message.headQuat[1] = ovrhead.rotation.x;
+            message.headQuat[2] = ovrhead.rotation.y;
+            message.headQuat[3] = ovrhead.rotation.z;
+        }
+
+        // Right controller pose and buttons
+        OVRInput.Controller rightController = LRinverse ? OVRInput.Controller.LTouch : OVRInput.Controller.RTouch;
+        OVRInput.Controller leftController  = LRinverse ? OVRInput.Controller.RTouch : OVRInput.Controller.LTouch;
+
+        if (controller_right != null)
+        {
+            message.rightHand.wristPos[0] = controller_right.position.x;
+            message.rightHand.wristPos[1] = controller_right.position.y;
+            message.rightHand.wristPos[2] = controller_right.position.z;
+            message.rightHand.wristQuat[0] = controller_right.rotation.w;
+            message.rightHand.wristQuat[1] = controller_right.rotation.x;
+            message.rightHand.wristQuat[2] = controller_right.rotation.y;
+            message.rightHand.wristQuat[3] = controller_right.rotation.z;
+        }
+        message.rightHand.triggerState = OVRInput.Get(OVRInput.Axis1D.PrimaryIndexTrigger, rightController);
+        message.rightHand.buttonState[0] = OVRInput.Get(OVRInput.RawButton.B);
+        message.rightHand.buttonState[1] = OVRInput.Get(OVRInput.RawButton.A);
+        message.rightHand.buttonState[2] = OVRInput.Get(OVRInput.RawButton.RThumbstick);
+        message.rightHand.buttonState[3] = OVRInput.Get(OVRInput.RawButton.RIndexTrigger);
+        message.rightHand.buttonState[4] = OVRInput.Get(OVRInput.RawButton.RHandTrigger);
+
+        // Left controller pose and buttons
+        if (controller_left != null)
+        {
+            message.leftHand.wristPos[0] = controller_left.position.x;
+            message.leftHand.wristPos[1] = controller_left.position.y;
+            message.leftHand.wristPos[2] = controller_left.position.z;
+            message.leftHand.wristQuat[0] = controller_left.rotation.w;
+            message.leftHand.wristQuat[1] = controller_left.rotation.x;
+            message.leftHand.wristQuat[2] = controller_left.rotation.y;
+            message.leftHand.wristQuat[3] = controller_left.rotation.z;
+        }
+        message.leftHand.triggerState = OVRInput.Get(OVRInput.Axis1D.PrimaryIndexTrigger, leftController);
+        message.leftHand.buttonState[0] = OVRInput.Get(OVRInput.RawButton.Y);
+        message.leftHand.buttonState[1] = OVRInput.Get(OVRInput.RawButton.X);
+        message.leftHand.buttonState[2] = OVRInput.Get(OVRInput.RawButton.LThumbstick);
+        message.leftHand.buttonState[3] = OVRInput.Get(OVRInput.RawButton.LIndexTrigger);
+        message.leftHand.buttonState[4] = OVRInput.Get(OVRInput.RawButton.LHandTrigger);
+
         message.TransformToAlignSpace();
-        
+
         string mes = JsonUtility.ToJson(message);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(mes);
         string url = $"http://{ip}:{port}/unity";
