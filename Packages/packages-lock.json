@@ -1,46 +1,51 @@
 {
   "dependencies": {
     "com.meta.xr.sdk.core": {
-      "version": "file:../OculusPackages/com.meta.xr.sdk.core-62.0.0.tgz",
+      "version": "62.0.0",
       "depth": 0,
-      "source": "local-tarball",
-      "dependencies": {}
+      "source": "registry",
+      "dependencies": {},
+      "url": "https://packages.unity.com"
     },
     "com.meta.xr.sdk.interaction": {
-      "version": "file:../OculusPackages/com.meta.xr.sdk.interaction-62.0.0.tgz",
+      "version": "62.0.0",
       "depth": 0,
-      "source": "local-tarball",
-      "dependencies": {
-        "com.unity.textmeshpro": "3.0.6",
-        "com.unity.ugui": "1.0.0"
-      }
-    },
-    "com.meta.xr.sdk.interaction.ovr": {
-      "version": "file:../OculusPackages/com.meta.xr.sdk.interaction.ovr-62.0.0.tgz",
-      "depth": 0,
-      "source": "local-tarball",
-      "dependencies": {
-        "com.meta.xr.sdk.interaction": "62.0.0",
-        "com.meta.xr.sdk.core": "62.0.0"
-      }
-    },
-    "com.meta.xr.sdk.interaction.ovr.samples": {
-      "version": "file:../OculusPackages/com.meta.xr.sdk.interaction.ovr.samples-62.0.0.tgz",
-      "depth": 0,
-      "source": "local-tarball",
-      "dependencies": {
-        "com.meta.xr.sdk.interaction.ovr": "62.0.0",
-        "com.meta.xr.sdk.sharedassets": "62.0.0"
-      }
-    },
-    "com.meta.xr.sdk.sharedassets": {
-      "version": "file:../OculusPackages/com.meta.xr.sdk.sharedassets-62.0.0.tgz",
-      "depth": 0,
-      "source": "local-tarball",
+      "source": "registry",
       "dependencies": {
         "com.unity.ugui": "1.0.0",
         "com.unity.textmeshpro": "3.0.6"
-      }
+      },
+      "url": "https://packages.unity.com"
+    },
+    "com.meta.xr.sdk.interaction.ovr": {
+      "version": "62.0.0",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.meta.xr.sdk.core": "62.0.0",
+        "com.meta.xr.sdk.interaction": "62.0.0"
+      },
+      "url": "https://packages.unity.com"
+    },
+    "com.meta.xr.sdk.interaction.ovr.samples": {
+      "version": "62.0.0",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.meta.xr.sdk.sharedassets": "62.0.0",
+        "com.meta.xr.sdk.interaction.ovr": "62.0.0"
+      },
+      "url": "https://packages.unity.com"
+    },
+    "com.meta.xr.sdk.sharedassets": {
+      "version": "62.0.0",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.ugui": "1.0.0",
+        "com.unity.textmeshpro": "3.0.6"
+      },
+      "url": "https://packages.unity.com"
     },
     "com.unity.burst": {
       "version": "1.8.15",
@@ -53,7 +58,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.collab-proxy": {
-      "version": "2.3.1",
+      "version": "2.6.0",
       "depth": 0,
       "source": "registry",
       "dependencies": {},
@@ -84,7 +89,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.ide.rider": {
-      "version": "3.0.28",
+      "version": "3.0.34",
       "depth": 0,
       "source": "registry",
       "dependencies": {
@@ -138,7 +143,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.mobile.android-logcat": {
-      "version": "1.4.2",
+      "version": "1.4.4",
       "depth": 0,
       "source": "registry",
       "dependencies": {},
@@ -213,7 +218,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.textmeshpro": {
-      "version": "3.0.6",
+      "version": "3.0.7",
       "depth": 0,
       "source": "registry",
       "dependencies": {
@@ -302,7 +307,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.xr.oculus": {
-      "version": "4.2.0",
+      "version": "4.5.0",
       "depth": 0,
       "source": "registry",
       "dependencies": {

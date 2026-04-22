@@ -394,6 +394,11 @@ public class ChunkVisualizer : MonoBehaviour
         currentSelectedPointIndex = -1;
         currentHoveredPointIndex = -1;
     }
+
+    public int GetLastPointIndex()
+    {
+        return pointObjects.Count > 0 ? pointObjects.Count - 1 : -1;
+    }
     
     void OnDestroy()
     {

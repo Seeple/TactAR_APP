@@ -22,6 +22,14 @@ UserSettings/
 
 *.unity
 
+*.apk
+
+*.prefab
+
+*.json
+
+*.assest
+
 .vscode/
 
 Samples/

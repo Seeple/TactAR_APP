@@ -1078,6 +1078,7 @@ GameObject:
   - component: {fileID: 745937855}
   - component: {fileID: 745937857}
   - component: {fileID: 745937856}
+  - component: {fileID: 745937858}
   m_Layer: 0
   m_Name: Main
   m_TagString: Untagged
@@ -1112,14 +1113,35 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 22a5f0594b11ba5448ea31be03d1edfb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  ip: 192.168.2.187
+  ip: 10.128.1.12
   port: 8082
   Hz: 60
-  showText: {fileID: 2982190610834161401}
-  keyboard: {fileID: 2069529864509720341}
-  ovrhead: {fileID: 188315682086433829}
+  rightHand: {fileID: 4013855492150205689}
+  leftHand: {fileID: 995262848067602753}
   controller_right: {fileID: 185464157602886887}
   controller_left: {fileID: 183902050789167967}
+  showText: {fileID: 2982190610834161401}
+  keyboard: {fileID: 2069529864509720341}
+  chunkVisualizer: {fileID: 745937858}
+  ovrhead: {fileID: 188315682086433829}
+  enableCollisionDetection: 1
+  indexFingerTip: {fileID: 0}
+  collisionRadius: 0.005
+  collisionMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  enableRaySelection: 1
+  rayLength: 10
+  rayColor: {r: 0, g: 1, b: 0, a: 1}
+  rayHitColor: {r: 1, g: 0, b: 0, a: 1}
+  rayWidth: 0.003
+  raycastMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  pinchThreshold: 0.85
+  releaseThreshold: 0.5
+  showDebugSphere: 1
+  debugSphereColor: {r: 0, g: 1, b: 0, a: 1}
   LRinverse: 1
 --- !u!114 &745937856
 MonoBehaviour:
@@ -1147,22 +1169,31 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   head: {fileID: 188315682086433829}
   portRobot: 10001
-  portArrow: 10002
-  portLog: 10003
-  portImage: 10004
-  portForce: 10005
   leftTCP: {fileID: 437006228}
   rightTCP: {fileID: 214235646}
-  leftForce: {fileID: 3034521771391928556}
-  rightForce: {fileID: 200776978}
-  arrow1Color1: {r: 0.9647059, g: 1, b: 0, a: 1}
-  arrow1Color2: {r: 1, g: 0, b: 0.007843138, a: 1}
-  arrow2Color1: {r: 0, g: 1, b: 0.72156864, a: 1}
-  arrow2Color2: {r: 0, g: 0.06666667, b: 1, a: 1}
-  arrow1: {fileID: 454829535181443802, guid: d3a29c7974e0fd94e9b2e62d4c9ec5f9, type: 3}
-  arrow2: {fileID: 454829535181443802, guid: 13b66d68f805ea448aa6b7730fc9918c, type: 3}
-  mat: {fileID: 2100000, guid: f637e1a28666a9442a9290214821b6c9, type: 2}
-  oneUI: {fileID: 7443887322995414189, guid: e4dad693a9023194294f89b681df83a9, type: 3}
+--- !u!114 &745937858
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 745937853}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a1301d3bef3de140bb5bb538f3a70f80, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  port: 10006
+  pointSize: 0.005
+  axisLength: 0.05
+  lineWidth: 0.0025
+  whiteMaterial: {fileID: 2100000, guid: 8a7cc532c15198e07a7f54fdb6df8827, type: 2}
+  redMaterial: {fileID: 2100000, guid: b2941dd235f980dd39d2312b0a6e8264, type: 2}
+  greenMaterial: {fileID: 2100000, guid: a650666c9ec54efacbe47d74ec603779, type: 2}
+  blueMaterial: {fileID: 2100000, guid: 51eac20a77f530546a2ceddb6e586db9, type: 2}
+  enablePointSelection: 1
+  selectedPointColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
+  hoverPointColor: {r: 0, g: 1, b: 1, a: 1}
 --- !u!1 &751219473 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 8995142676830460177, guid: ea16c3c8c1688234fa81a4f39339bf1b,

@@ -132,6 +132,14 @@ public class VRController : MonoBehaviour
     public Transform indexFingerTip;  // 食指尖端 Transform（从 OVRSkeleton 获取）
     public float collisionRadius = 0.02f;  // 碰撞检测半径
     public LayerMask collisionMask = ~0;  // 碰撞检测层
+
+    [Header("Ray selection settings")]
+    public bool enableRaySelection = true;
+    public float rayLength = 10.0f;
+    public Color rayColor = Color.green;
+    public Color rayHitColor = Color.red;
+    public float rayWidth = 0.003f;
+    public LayerMask raycastMask = ~0;
     
     [Header("捏合手势设置")]
     public float pinchThreshold = 0.85f;  // 捏合强度阈值（0-1）
@@ -146,6 +154,10 @@ public class VRController : MonoBehaviour
     private int selectedPointIndex = -1;
     private bool isEditingTrajectory = false;
     private bool wasPinching = false;  // 上一帧是否在捏合
+
+    private LineRenderer rightHandRay;
+    private bool useRaySelection = false;
+    private bool useLastPointSelection = false;
 
     private HandEditMessage message;
     public bool LRinverse = false;
@@ -162,6 +174,11 @@ public class VRController : MonoBehaviour
         
         // 初始化碰撞检测
         InitializeCollisionDetection();
+
+        // Initialize ray selection
+        InitializeRay();
+
+        UpdateDebugVisibility();
     }
     
     /// <summary>
@@ -209,6 +226,40 @@ public class VRController : MonoBehaviour
             // 移除默认的 Collider（我们用 Physics.OverlapSphere）
             DestroyImmediate(debugSphere.GetComponent<Collider>());
         }
+    }
+
+    void InitializeRay()
+    {
+        GameObject rayGO = new GameObject("RightHandRay");
+
+        if (rightHand != null && rightHand.PointerPose != null)
+        {
+            rayGO.transform.SetParent(rightHand.PointerPose);
+        }
+        else
+        {
+            Debug.LogWarning("VRController: RightHand PointerPose not found, ray attached to root");
+            rayGO.transform.SetParent(transform);
+        }
+
+        rightHandRay = rayGO.AddComponent<LineRenderer>();
+        ConfigureRay(rightHandRay);
+        rightHandRay.enabled = false;
+    }
+
+    void ConfigureRay(LineRenderer ray)
+    {
+        ray.startWidth = rayWidth;
+        ray.endWidth = rayWidth;
+        ray.material = new Material(Shader.Find("Sprites/Default"));
+        ray.startColor = rayColor;
+        ray.endColor = rayColor;
+        ray.positionCount = 2;
+        ray.enabled = enableRaySelection;
+
+        // Avoid starting at origin
+        ray.SetPosition(0, Vector3.zero);
+        ray.SetPosition(1, Vector3.forward);
     }
     
     /// <summary>
@@ -275,6 +326,25 @@ public class VRController : MonoBehaviour
         
         if (calibrationMode) return;
 
+        // Toggle last-point selection mode with Y button
+        if (OVRInput.GetDown(OVRInput.RawButton.Y))
+        {
+            useLastPointSelection = !useLastPointSelection;
+            ClearHoverState();
+            ClearSelectedState();
+            UpdateDebugVisibility();
+            Debug.Log($"VRController: Last-point selection = {useLastPointSelection}");
+        }
+
+        // Toggle selection mode with B button
+        if (OVRInput.GetDown(OVRInput.RawButton.B))
+        {
+            useRaySelection = !useRaySelection;
+            ClearHoverState();
+            UpdateDebugVisibility();
+            Debug.Log($"VRController: Selection mode = {(useRaySelection ? "Ray" : "Collision")}");
+        }
+
         // 左手摇杆: 切换键盘
         if (OVRInput.GetDown(OVRInput.RawButton.LThumbstick))
         {
@@ -284,12 +354,25 @@ public class VRController : MonoBehaviour
             }
         }
         
-        // === 手势控制的轨迹编辑（碰撞检测版本） ===
-        
-        if (rightHand != null && rightHand.IsDataValid && enableCollisionDetection)
+        // === Trajectory selection ===
+
+        if (rightHand != null && rightHand.IsDataValid)
         {
-            UpdateCollisionDetection();
-            HandlePinchGesture();
+            if (useLastPointSelection)
+            {
+                UpdateLastPointHover();
+                HandlePinchGesture();
+            }
+            else if (useRaySelection && enableRaySelection)
+            {
+                UpdateHandRaySelection();
+                HandlePinchGesture();
+            }
+            else if (enableCollisionDetection)
+            {
+                UpdateCollisionDetection();
+                HandlePinchGesture();
+            }
         }
         
         // 更新编辑数据
@@ -319,11 +402,14 @@ public class VRController : MonoBehaviour
             debugSphere.transform.position = indexFingerTip.position;
         }
         
-        // 没有碰撞，清除悬停状态
-        if (hoveredPointIndex >= 0 && chunkVisualizer != null)
+        bool allowHoverUpdate = !useLastPointSelection;
+        if (allowHoverUpdate)
         {
-            chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
-            hoveredPointIndex = -1;
+            if (hoveredPointIndex >= 0 && chunkVisualizer != null)
+            {
+                chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
+                hoveredPointIndex = -1;
+            }
         }
         
         // 核心：使用 Physics.OverlapSphere 检测碰撞
@@ -356,10 +442,13 @@ public class VRController : MonoBehaviour
         // 如果找到了碰撞的点，设置为悬停状态
         if (closestPoint != null)
         {
-            hoveredPointIndex = closestPoint.pointIndex;
-            if (chunkVisualizer != null)
+            if (allowHoverUpdate)
             {
-                chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+                hoveredPointIndex = closestPoint.pointIndex;
+                if (chunkVisualizer != null)
+                {
+                    chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+                }
             }
             
             // 调试球体变红表示接触
@@ -377,6 +466,117 @@ public class VRController : MonoBehaviour
                 debugSphere.GetComponent<Renderer>().material.color = 
                     new Color(debugSphereColor.r, debugSphereColor.g, debugSphereColor.b, 0.3f);
             }
+        }
+    }
+
+    void UpdateHandRaySelection()
+    {
+        if (rightHand.PointerPose == null || !rightHand.IsPointerPoseValid)
+        {
+            if (rightHandRay != null)
+            {
+                rightHandRay.enabled = false;
+            }
+            ClearHoverState();
+            return;
+        }
+
+        if (rightHandRay != null)
+        {
+            rightHandRay.enabled = enableRaySelection;
+        }
+
+        Ray ray = new Ray(rightHand.PointerPose.position, rightHand.PointerPose.forward);
+        RaycastHit hit;
+
+        if (!useLastPointSelection)
+        {
+            ClearHoverState();
+        }
+
+        if (Physics.Raycast(ray, out hit, rayLength, raycastMask))
+        {
+            TrajectoryPointData pointData = hit.collider.GetComponent<TrajectoryPointData>();
+            if (pointData != null)
+            {
+                if (!useLastPointSelection)
+                {
+                    hoveredPointIndex = pointData.pointIndex;
+                    if (chunkVisualizer != null)
+                    {
+                        chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+                    }
+                }
+
+                if (rightHandRay != null)
+                {
+                    rightHandRay.startColor = rayHitColor;
+                    rightHandRay.endColor = rayHitColor;
+                    rightHandRay.SetPosition(0, ray.origin);
+                    rightHandRay.SetPosition(1, hit.point);
+                }
+                return;
+            }
+        }
+
+        if (rightHandRay != null)
+        {
+            rightHandRay.startColor = rayColor;
+            rightHandRay.endColor = rayColor;
+            rightHandRay.SetPosition(0, ray.origin);
+            rightHandRay.SetPosition(1, ray.origin + ray.direction * rayLength);
+        }
+    }
+
+    void ClearHoverState()
+    {
+        if (hoveredPointIndex >= 0 && chunkVisualizer != null)
+        {
+            chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
+        }
+        hoveredPointIndex = -1;
+    }
+
+    void UpdateDebugVisibility()
+    {
+        bool showRay = useRaySelection && enableRaySelection && !useLastPointSelection;
+        bool showSphere = showDebugSphere && !useRaySelection && !useLastPointSelection;
+
+        if (rightHandRay != null)
+        {
+            rightHandRay.enabled = showRay;
+        }
+
+        if (debugSphere != null)
+        {
+            debugSphere.SetActive(showSphere);
+        }
+    }
+
+    void ClearSelectedState()
+    {
+        if (selectedPointIndex >= 0 && chunkVisualizer != null)
+        {
+            chunkVisualizer.SetPointSelected(selectedPointIndex, false);
+        }
+        selectedPointIndex = -1;
+        isEditingTrajectory = false;
+        message.trajectoryEdit.isEditing = false;
+        message.trajectoryEdit.selectedPointIndex = -1;
+    }
+
+    void UpdateLastPointHover()
+    {
+        if (chunkVisualizer == null) return;
+
+        int lastIndex = chunkVisualizer.GetLastPointIndex();
+        if (lastIndex < 0) return;
+
+        if (hoveredPointIndex != lastIndex)
+        {
+            ClearHoverState();
+            hoveredPointIndex = lastIndex;
+            chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
         }
     }
     
@@ -409,6 +609,15 @@ public class VRController : MonoBehaviour
     /// </summary>
     void HandleTrajectorySelection()
     {
+        if (useLastPointSelection && chunkVisualizer != null)
+        {
+            int lastIndex = chunkVisualizer.GetLastPointIndex();
+            if (lastIndex >= 0)
+            {
+                hoveredPointIndex = lastIndex;
+            }
+        }
+
         if (hoveredPointIndex >= 0)
         {
             if (selectedPointIndex >= 0 && selectedPointIndex != hoveredPointIndex && chunkVisualizer != null)
@@ -433,6 +642,15 @@ public class VRController : MonoBehaviour
     /// </summary>
     void UpdateTrajectoryEditData()
     {
+        if (useLastPointSelection && chunkVisualizer != null)
+        {
+            int lastIndex = chunkVisualizer.GetLastPointIndex();
+            if (lastIndex >= 0)
+            {
+                selectedPointIndex = lastIndex;
+            }
+        }
+
         if (selectedPointIndex >= 0 && indexFingerTip != null)
         {
             message.trajectoryEdit.isEditing = true;
@@ -553,5 +771,38 @@ public class VRController : MonoBehaviour
         {
             DestroyImmediate(debugSphere);
         }
+    }
+
+    public bool TryGetIndexTipPose(out Vector3 position, out Quaternion rotation)
+    {
+        if (indexFingerTip != null)
+        {
+            position = indexFingerTip.position;
+            rotation = indexFingerTip.rotation;
+            return true;
+        }
+
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        return false;
+    }
+
+    public bool TryGetEditedPointPose(out Vector3 position, out Quaternion rotation, out bool isEditing, out int selectedIndex)
+    {
+        if (message == null || message.trajectoryEdit == null)
+        {
+            position = Vector3.zero;
+            rotation = Quaternion.identity;
+            isEditing = false;
+            selectedIndex = -1;
+            return false;
+        }
+
+        TrajectoryEditMessage edit = message.trajectoryEdit;
+        isEditing = edit.isEditing;
+        selectedIndex = edit.selectedPointIndex;
+        position = new Vector3(edit.editedPointPos[0], edit.editedPointPos[1], edit.editedPointPos[2]);
+        rotation = new Quaternion(edit.editedPointQuat[1], edit.editedPointQuat[2], edit.editedPointQuat[3], edit.editedPointQuat[0]);
+        return true;
     }
 }
