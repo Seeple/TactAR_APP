@@ -31,6 +31,15 @@ public class VisualizationServer : MonoBehaviour
     // public int portForce = 10005; // Force sensor arrows - 已禁用
     public Transform leftTCP;
     public Transform rightTCP;
+    public float leftGripperWidth;
+
+    [Header("Robot TCP ghost")]
+    public bool showRobotTcpGhost = false;
+    public bool robotGhostUseRightTcp = false;
+    public string robotGhostResourcePath = "Prefab/GhostGripper";
+    public float robotGhostScale = 0.5f;
+    public float robotGhostAlpha = 0.35f;
+    public Vector3 robotGhostRotationOffsetEuler = Vector3.zero;
     // public Transform leftForce;  // 已禁用
     // public Transform rightForce; // 已禁用
     UdpClient serverRobot;
@@ -43,6 +52,9 @@ public class VisualizationServer : MonoBehaviour
 
     Transform point;
     Thread threadRobot; //, threadArrow, threadLog, threadImage, threadForce; // 已禁用其他线程
+
+    GameObject robotGhostPrefab;
+    GameObject robotGhostInstance;
 
     /*
     Initialization of the UDP servers and threads.
@@ -348,6 +360,107 @@ public class VisualizationServer : MonoBehaviour
         rightTCP.localPosition = new Vector3(pose.rightRobotTCP[0], pose.rightRobotTCP[1], pose.rightRobotTCP[2]);
         leftTCP.localRotation = new Quaternion(pose.leftRobotTCP[4], pose.leftRobotTCP[5], pose.leftRobotTCP[6], pose.leftRobotTCP[3]);
         rightTCP.localRotation = new Quaternion(pose.rightRobotTCP[4], pose.rightRobotTCP[5], pose.rightRobotTCP[6], pose.rightRobotTCP[3]);
+
+        if (pose.leftGripperState != null && pose.leftGripperState.Count > 0)
+        {
+            leftGripperWidth = pose.leftGripperState[0];
+        }
+
+        UpdateRobotGhost();
+    }
+
+    void UpdateRobotGhost()
+    {
+        if (!showRobotTcpGhost)
+        {
+            if (robotGhostInstance != null)
+            {
+                robotGhostInstance.SetActive(false);
+            }
+            return;
+        }
+
+        Transform tcp = robotGhostUseRightTcp ? rightTCP : leftTCP;
+        if (tcp == null)
+        {
+            return;
+        }
+
+        EnsureRobotGhost(tcp);
+        if (robotGhostInstance == null)
+        {
+            return;
+        }
+
+        robotGhostInstance.SetActive(true);
+        robotGhostInstance.transform.SetParent(tcp, false);
+        robotGhostInstance.transform.localPosition = Vector3.zero;
+        robotGhostInstance.transform.localRotation = Quaternion.Euler(robotGhostRotationOffsetEuler);
+        robotGhostInstance.transform.localScale = Vector3.one * robotGhostScale;
+
+        GripperJawController jawController = robotGhostInstance.GetComponentInChildren<GripperJawController>();
+        if (jawController != null)
+        {
+            jawController.jawWidth = leftGripperWidth;
+        }
+    }
+
+    void EnsureRobotGhost(Transform parent)
+    {
+        if (robotGhostInstance != null)
+        {
+            return;
+        }
+
+        if (robotGhostPrefab == null)
+        {
+            robotGhostPrefab = Resources.Load<GameObject>(robotGhostResourcePath);
+        }
+
+        if (robotGhostPrefab == null)
+        {
+            Debug.LogWarning($"VisualizationServer: Robot ghost prefab not found at Resources/{robotGhostResourcePath}");
+            return;
+        }
+
+        robotGhostInstance = Instantiate(robotGhostPrefab, parent);
+        robotGhostInstance.name = "RobotTcpGhostGripper";
+        ApplyRobotGhostAppearance(robotGhostInstance);
+    }
+
+    void ApplyRobotGhostAppearance(GameObject ghost)
+    {
+        foreach (Collider collider in ghost.GetComponentsInChildren<Collider>())
+        {
+            Destroy(collider);
+        }
+
+        foreach (Renderer renderer in ghost.GetComponentsInChildren<Renderer>())
+        {
+            if (renderer.sharedMaterial == null)
+            {
+                continue;
+            }
+
+            Material material = new Material(renderer.sharedMaterial);
+            Color color = material.color;
+            color.a = robotGhostAlpha;
+            material.color = color;
+            SetMaterialTransparent(material);
+            renderer.material = material;
+        }
+    }
+
+    void SetMaterialTransparent(Material material)
+    {
+        material.SetFloat("_Mode", 3f);
+        material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        material.SetInt("_ZWrite", 0);
+        material.DisableKeyword("_ALPHATEST_ON");
+        material.EnableKeyword("_ALPHABLEND_ON");
+        material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+        material.renderQueue = 3000;
     }
 
     /* 已禁用 - Tactile Sensor Arrow 可视化相关变量和方法
