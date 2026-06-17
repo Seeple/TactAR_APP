@@ -158,8 +158,6 @@ public class VRController : MonoBehaviour
     private LineRenderer rightHandRay;
     private bool useRaySelection = false;
     private bool useLastPointSelection = false;
-    private bool actionChunkVisible = true;
-    private bool ghostGrippersVisible = true;
 
     private HandEditMessage message;
     public bool LRinverse = false;
@@ -311,8 +309,6 @@ public class VRController : MonoBehaviour
 
     public void Update()
     {
-        bool allowControllerButtons = (OVRInput.GetActiveController() & (OVRInput.Controller.LTouch | OVRInput.Controller.RTouch)) != 0;
-
         // 键盘位置更新（使用控制器位置）
         if (keyboard != null && controller_right != null)
         {
@@ -330,28 +326,8 @@ public class VRController : MonoBehaviour
         
         if (calibrationMode) return;
 
-        // Toggle action chunk visibility with X (no combo)
-        if (allowControllerButtons && OVRInput.GetDown(OVRInput.RawButton.X) && !OVRInput.Get(OVRInput.RawButton.A))
-        {
-            actionChunkVisible = !actionChunkVisible;
-            if (chunkVisualizer != null)
-            {
-                chunkVisualizer.SetActionChunkVisible(actionChunkVisible);
-            }
-        }
-
-        // Toggle ghost gripper visibility with A (no combo)
-        if (allowControllerButtons && OVRInput.GetDown(OVRInput.RawButton.A) && !OVRInput.Get(OVRInput.RawButton.X))
-        {
-            ghostGrippersVisible = !ghostGrippersVisible;
-            if (chunkVisualizer != null)
-            {
-                chunkVisualizer.SetGhostGrippersVisible(ghostGrippersVisible);
-            }
-        }
-
         // Toggle last-point selection mode with Y button
-        if (allowControllerButtons && OVRInput.GetDown(OVRInput.RawButton.Y))
+        if (OVRInput.GetDown(OVRInput.RawButton.Y))
         {
             useLastPointSelection = !useLastPointSelection;
             ClearHoverState();
@@ -361,7 +337,7 @@ public class VRController : MonoBehaviour
         }
 
         // Toggle selection mode with B button
-        if (allowControllerButtons && OVRInput.GetDown(OVRInput.RawButton.B))
+        if (OVRInput.GetDown(OVRInput.RawButton.B))
         {
             useRaySelection = !useRaySelection;
             ClearHoverState();
@@ -653,7 +629,6 @@ public class VRController : MonoBehaviour
             if (chunkVisualizer != null)
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, true);
-                chunkVisualizer.SetSelectedGhost(selectedPointIndex, true);
             }
             isEditingTrajectory = true;
             
@@ -693,11 +668,6 @@ public class VRController : MonoBehaviour
             message.trajectoryEdit.editedPointQuat[1] = rot.x;
             message.trajectoryEdit.editedPointQuat[2] = rot.y;
             message.trajectoryEdit.editedPointQuat[3] = rot.z;
-
-            if (chunkVisualizer != null)
-            {
-                chunkVisualizer.SetSelectedGhost(selectedPointIndex, isEditingTrajectory);
-            }
         }
     }
     
@@ -709,11 +679,6 @@ public class VRController : MonoBehaviour
         isEditingTrajectory = false;
         message.trajectoryEdit.isEditing = false;
         message.trajectoryEdit.selectedPointIndex = -1;
-
-        if (chunkVisualizer != null)
-        {
-            chunkVisualizer.SetSelectedGhost(-1, false);
-        }
         
         if (selectedPointIndex >= 0)
         {

@@ -45,23 +45,6 @@ public class ChunkVisualizer : MonoBehaviour
     private List<GameObject> pointObjects = new List<GameObject>();
     private List<GameObject> lineObjects = new List<GameObject>();
     private List<GameObject> axisObjects = new List<GameObject>();
-
-    [Header("Ghost gripper settings")]
-    public string ghostGripperResourcePath = "Prefab/GhostGripper";
-    public float ghostJawWidth = 0.085f;
-    public float ghostAlpha = 0.35f;
-    public float ghostScale = 0.5f;
-    public Vector3 ghostRotationOffsetEuler = new Vector3(0f, 90f, 0f);
-    public bool showActionChunk = true;
-    public bool showGhostGrippers = true;
-
-    private GameObject ghostGripperPrefab;
-    private GameObject lastPointGhost;
-    private GameObject selectedPointGhost;
-    private int selectedGhostIndex = -1;
-    private bool selectedGhostEditing = false;
-    private List<Vector3> cachedPositions = new List<Vector3>();
-    private List<Quaternion> cachedRotations = new List<Quaternion>();
     
     // Action chunk data: 6D pose (x,y,z,r,p,y)
     [DataContract]
@@ -94,11 +77,6 @@ public class ChunkVisualizer : MonoBehaviour
     {
         InitializeTrajectoryContainer();
         StartReceivingData();
-    }
-
-    void Update()
-    {
-        UpdateGhostGripperJawWidth();
     }
     
     void InitializeTrajectoryContainer()
@@ -169,13 +147,6 @@ public class ChunkVisualizer : MonoBehaviour
         CreateTrajectoryPoints(positions);
         CreateConnectionLines(positions);
         CreateCoordinateAxes(positions, rotations);
-        CacheTrajectoryPoses(positions, rotations);
-        UpdateLastPointGhost();
-        UpdateSelectedGhostPose();
-        UpdateGhostVisibility();
-
-        SetActionChunkVisible(showActionChunk);
-        SetGhostGrippersVisible(showGhostGrippers);
         
         // 轨迹更新后恢复选中和悬停状态
         RestorePointStates();
@@ -344,214 +315,6 @@ public class ChunkVisualizer : MonoBehaviour
                 Destroy(axis);
             }
             axisObjects.Clear();
-
-        }
-    }
-
-    void CacheTrajectoryPoses(List<Vector3> positions, List<Quaternion> rotations)
-    {
-        cachedPositions = new List<Vector3>(positions);
-        cachedRotations = new List<Quaternion>(rotations);
-    }
-
-    void UpdateLastPointGhost()
-    {
-        if (!EnsureGhost(ref lastPointGhost, "GhostGripper_Last"))
-        {
-            return;
-        }
-
-        int lastIndex = cachedPositions.Count - 1;
-        if (lastIndex < 0)
-        {
-            return;
-        }
-
-        SetGhostPose(lastPointGhost, lastIndex);
-    }
-
-    void UpdateSelectedGhostPose()
-    {
-        if (!EnsureGhost(ref selectedPointGhost, "GhostGripper_Selected"))
-        {
-            return;
-        }
-
-        if (!HasCachedIndex(selectedGhostIndex))
-        {
-            return;
-        }
-
-        SetGhostPose(selectedPointGhost, selectedGhostIndex);
-    }
-
-    void SetGhostPose(GameObject ghost, int index)
-    {
-        ghost.transform.localPosition = cachedPositions[index];
-        ghost.transform.localRotation = cachedRotations[index] * Quaternion.Euler(ghostRotationOffsetEuler);
-    }
-
-    bool HasCachedIndex(int index)
-    {
-        return index >= 0 && index < cachedPositions.Count && index < cachedRotations.Count;
-    }
-
-    bool EnsureGhost(ref GameObject ghost, string name)
-    {
-        if (ghost != null)
-        {
-            return true;
-        }
-
-        GameObject prefab = GetGhostGripperPrefab();
-        if (prefab == null)
-        {
-            return false;
-        }
-
-        ghost = Instantiate(prefab, trajectoryContainer.transform);
-        ghost.name = name;
-        ghost.transform.localScale = Vector3.one * ghostScale;
-        ApplyGhostAppearance(ghost);
-        return true;
-    }
-
-    void UpdateGhostGripperJawWidth()
-    {
-        float width = GetLiveGripperWidth();
-        UpdateJawWidthForGhost(lastPointGhost, width);
-        UpdateJawWidthForGhost(selectedPointGhost, width);
-    }
-
-    void UpdateJawWidthForGhost(GameObject ghost, float width)
-    {
-        if (ghost == null)
-        {
-            return;
-        }
-
-        GripperJawController jawController = ghost.GetComponentInChildren<GripperJawController>();
-        if (jawController != null)
-        {
-            jawController.jawWidth = width;
-        }
-    }
-
-    float GetLiveGripperWidth()
-    {
-        if (VisualizationServer.instance != null && VisualizationServer.instance.leftGripperWidth > 0f)
-        {
-            return VisualizationServer.instance.leftGripperWidth;
-        }
-
-        return ghostJawWidth;
-    }
-
-    GameObject GetGhostGripperPrefab()
-    {
-        if (ghostGripperPrefab != null)
-        {
-            return ghostGripperPrefab;
-        }
-
-        ghostGripperPrefab = Resources.Load<GameObject>(ghostGripperResourcePath);
-        if (ghostGripperPrefab == null)
-        {
-            Debug.LogWarning($"ChunkVisualizer: GhostGripper prefab not found at Resources/{ghostGripperResourcePath}");
-        }
-        return ghostGripperPrefab;
-    }
-
-    void ApplyGhostAppearance(GameObject ghost)
-    {
-        foreach (Collider collider in ghost.GetComponentsInChildren<Collider>())
-        {
-            Destroy(collider);
-        }
-
-        foreach (Renderer renderer in ghost.GetComponentsInChildren<Renderer>())
-        {
-            if (renderer.sharedMaterial == null)
-            {
-                continue;
-            }
-
-            Material material = new Material(renderer.sharedMaterial);
-            Color color = material.color;
-            color.a = ghostAlpha;
-            material.color = color;
-            SetMaterialTransparent(material);
-            renderer.material = material;
-        }
-    }
-
-    void SetMaterialTransparent(Material material)
-    {
-        material.SetFloat("_Mode", 3f);
-        material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-        material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        material.SetInt("_ZWrite", 0);
-        material.DisableKeyword("_ALPHATEST_ON");
-        material.EnableKeyword("_ALPHABLEND_ON");
-        material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-        material.renderQueue = 3000;
-    }
-
-    public void SetActionChunkVisible(bool isVisible)
-    {
-        showActionChunk = isVisible;
-
-        foreach (GameObject point in pointObjects)
-        {
-            Renderer renderer = point.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.enabled = isVisible;
-            }
-        }
-        foreach (GameObject line in lineObjects)
-        {
-            line.SetActive(isVisible);
-        }
-        foreach (GameObject axis in axisObjects)
-        {
-            axis.SetActive(isVisible);
-        }
-    }
-
-    public void SetGhostGrippersVisible(bool isVisible)
-    {
-        showGhostGrippers = isVisible;
-        UpdateGhostVisibility();
-    }
-
-    public void SetSelectedGhost(int pointIndex, bool isEditing)
-    {
-        selectedGhostIndex = pointIndex;
-        selectedGhostEditing = isEditing;
-        UpdateSelectedGhostPose();
-        UpdateGhostVisibility();
-    }
-
-    void UpdateGhostVisibility()
-    {
-        int lastIndex = cachedPositions.Count - 1;
-        bool hasLast = lastIndex >= 0;
-
-        if (lastPointGhost != null)
-        {
-            lastPointGhost.SetActive(showGhostGrippers && hasLast);
-        }
-
-        bool showSelected = showGhostGrippers && selectedGhostEditing && HasCachedIndex(selectedGhostIndex);
-        if (showSelected && selectedGhostIndex == lastIndex)
-        {
-            showSelected = false;
-        }
-
-        if (selectedPointGhost != null)
-        {
-            selectedPointGhost.SetActive(showSelected);
         }
     }
     

@@ -1171,13 +1171,6 @@ MonoBehaviour:
   portRobot: 10001
   leftTCP: {fileID: 437006228}
   rightTCP: {fileID: 214235646}
-  leftGripperWidth: 0
-  showRobotTcpGhost: 1
-  robotGhostUseRightTcp: 0
-  robotGhostResourcePath: Prefab/GhostGripper
-  robotGhostScale: 0.25
-  robotGhostAlpha: 0.05
-  robotGhostRotationOffsetEuler: {x: -90, y: 0, z: 0}
 --- !u!114 &745937858
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1201,13 +1194,6 @@ MonoBehaviour:
   enablePointSelection: 1
   selectedPointColor: {r: 1, g: 0.92156863, b: 0.015686275, a: 1}
   hoverPointColor: {r: 0, g: 1, b: 1, a: 1}
-  ghostGripperResourcePath: Prefab/GhostGripper
-  ghostJawWidth: 0.085
-  ghostAlpha: 0.05
-  ghostScale: 0.25
-  ghostRotationOffsetEuler: {x: -90, y: 0, z: 0}
-  showActionChunk: 1
-  showGhostGrippers: 1
 --- !u!1 &751219473 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 8995142676830460177, guid: ea16c3c8c1688234fa81a4f39339bf1b,
