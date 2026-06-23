@@ -13,12 +13,21 @@ public class HandMessage
     public float[] wristQuat;  // (w, qx, qy, qz)
     public float triggerState;
     public bool[] buttonState; // (B/Y, A/X, joystick, trigger, side_trigger)
+    public float[] handPosePos;   // Optional hand/fingertip pose for sanity checks
+    public float[] handPoseQuat;  // (w, qx, qy, qz)
+    public float handPinchState;
+    public bool handPoseValid;
 
     public HandMessage()
     {
         wristPos = new float[3];
         wristQuat = new float[4];
         buttonState = new bool[5];
+        handPosePos = new float[3];
+        handPoseQuat = new float[4];
+        handPoseQuat[0] = 1f;
+        handPinchState = 0f;
+        handPoseValid = false;
     }
 
     public void TransformToAlignSpace()
@@ -29,6 +38,14 @@ public class HandMessage
             wristPos[0] = p.x; wristPos[1] = p.y; wristPos[2] = p.z;
             Quaternion q = Calibration.instance.GetRotation(new Quaternion(wristQuat[1], wristQuat[2], wristQuat[3], wristQuat[0]));
             wristQuat[0] = q.w; wristQuat[1] = q.x; wristQuat[2] = q.y; wristQuat[3] = q.z;
+
+            if (handPoseValid)
+            {
+                Vector3 hp = Calibration.instance.GetPosition(new Vector3(handPosePos[0], handPosePos[1], handPosePos[2]));
+                handPosePos[0] = hp.x; handPosePos[1] = hp.y; handPosePos[2] = hp.z;
+                Quaternion hq = Calibration.instance.GetRotation(new Quaternion(handPoseQuat[1], handPoseQuat[2], handPoseQuat[3], handPoseQuat[0]));
+                handPoseQuat[0] = hq.w; handPoseQuat[1] = hq.x; handPoseQuat[2] = hq.y; handPoseQuat[3] = hq.z;
+            }
         }
     }
 }
@@ -730,6 +747,49 @@ public class VRController : MonoBehaviour
         }
     }
 
+    void ClearHandPoseMessage(HandMessage handMessage)
+    {
+        if (handMessage == null) return;
+
+        handMessage.handPoseValid = false;
+        handMessage.handPinchState = 0f;
+        handMessage.handPosePos[0] = 0f;
+        handMessage.handPosePos[1] = 0f;
+        handMessage.handPosePos[2] = 0f;
+        handMessage.handPoseQuat[0] = 1f;
+        handMessage.handPoseQuat[1] = 0f;
+        handMessage.handPoseQuat[2] = 0f;
+        handMessage.handPoseQuat[3] = 0f;
+    }
+
+    void UpdateHandPoseMessage(HandMessage handMessage, OVRHand sourceHand, Transform poseTransform)
+    {
+        ClearHandPoseMessage(handMessage);
+
+        if (handMessage == null || sourceHand == null)
+        {
+            return;
+        }
+
+        handMessage.handPinchState = sourceHand.GetFingerPinchStrength(OVRHand.HandFinger.Index);
+        if (poseTransform == null || !sourceHand.IsDataValid)
+        {
+            return;
+        }
+
+        Vector3 pos = poseTransform.position;
+        Quaternion rot = poseTransform.rotation;
+
+        handMessage.handPosePos[0] = pos.x;
+        handMessage.handPosePos[1] = pos.y;
+        handMessage.handPosePos[2] = pos.z;
+        handMessage.handPoseQuat[0] = rot.w;
+        handMessage.handPoseQuat[1] = rot.x;
+        handMessage.handPoseQuat[2] = rot.y;
+        handMessage.handPoseQuat[3] = rot.z;
+        handMessage.handPoseValid = true;
+    }
+
     // Collect all pose/button data and send to workstation at fixed Hz
     public void CollectAndSend()
     {
@@ -785,6 +845,9 @@ public class VRController : MonoBehaviour
         message.leftHand.buttonState[2] = OVRInput.Get(OVRInput.RawButton.LThumbstick);
         message.leftHand.buttonState[3] = OVRInput.Get(OVRInput.RawButton.LIndexTrigger);
         message.leftHand.buttonState[4] = OVRInput.Get(OVRInput.RawButton.LHandTrigger);
+
+        UpdateHandPoseMessage(message.rightHand, rightHand, indexFingerTip);
+        UpdateHandPoseMessage(message.leftHand, leftHand, null);
 
         message.TransformToAlignSpace();
 
