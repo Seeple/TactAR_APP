@@ -1172,7 +1172,8 @@ MonoBehaviour:
   leftTCP: {fileID: 437006228}
   rightTCP: {fileID: 214235646}
   leftGripperWidth: 0
-  showRobotTcpGhost: 1
+  hasLeftGripperWidth: 0
+  showRobotTcpGhost: 0
   robotGhostUseRightTcp: 0
   robotGhostResourcePath: Prefab/GhostGripper
   robotGhostScale: 0.25
@@ -1206,6 +1207,7 @@ MonoBehaviour:
   ghostAlpha: 0.05
   ghostScale: 0.25
   ghostRotationOffsetEuler: {x: -90, y: 0, z: 0}
+  ghostSampleStride: 4
   showActionChunk: 1
   showGhostGrippers: 1
 --- !u!1 &751219473 stripped
