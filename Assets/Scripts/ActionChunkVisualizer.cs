@@ -52,16 +52,19 @@ public class ChunkVisualizer : MonoBehaviour
     public float ghostAlpha = 0.35f;
     public float ghostScale = 0.5f;
     public Vector3 ghostRotationOffsetEuler = new Vector3(0f, 90f, 0f);
+    public int ghostSampleStride = 4;
     public bool showActionChunk = true;
     public bool showGhostGrippers = true;
 
     private GameObject ghostGripperPrefab;
-    private GameObject lastPointGhost;
     private GameObject selectedPointGhost;
+    private List<GameObject> sampledPointGhosts = new List<GameObject>();
+    private List<int> sampledGhostIndices = new List<int>();
     private int selectedGhostIndex = -1;
     private bool selectedGhostEditing = false;
     private List<Vector3> cachedPositions = new List<Vector3>();
     private List<Quaternion> cachedRotations = new List<Quaternion>();
+    private List<float> cachedGripperWidths = new List<float>();
     
     // Action chunk data: 6D pose (x,y,z,r,p,y)
     [DataContract]
@@ -79,6 +82,18 @@ public class ChunkVisualizer : MonoBehaviour
         public float pitch { get; set; }
         [DataMember]
         public float yaw { get; set; }
+        [DataMember]
+        public bool hasQuaternion { get; set; }
+        [DataMember]
+        public float qx { get; set; }
+        [DataMember]
+        public float qy { get; set; }
+        [DataMember]
+        public float qz { get; set; }
+        [DataMember]
+        public float qw { get; set; }
+        [DataMember]
+        public float gripperWidth { get; set; } = -1f;
     }
     
     [DataContract]
@@ -164,13 +179,14 @@ public class ChunkVisualizer : MonoBehaviour
         // 提取位置和旋转
         List<Vector3> positions = ExtractPositions(currentTrajectoryData.points);
         List<Quaternion> rotations = ExtractRotations(currentTrajectoryData.points);
+        List<float> gripperWidths = ExtractGripperWidths(currentTrajectoryData.points);
 
         // 创建新的可视化
         CreateTrajectoryPoints(positions);
         CreateConnectionLines(positions);
         CreateCoordinateAxes(positions, rotations);
-        CacheTrajectoryPoses(positions, rotations);
-        UpdateLastPointGhost();
+        CacheTrajectoryPoses(positions, rotations, gripperWidths);
+        UpdateSampledPointGhosts();
         UpdateSelectedGhostPose();
         UpdateGhostVisibility();
 
@@ -199,12 +215,41 @@ public class ChunkVisualizer : MonoBehaviour
         
         for (int i = 0; i < points.Count; i++)
         {
-            // 将欧拉角（roll, pitch, yaw）转换为四元数
-            // 注意：Unity的Quaternion.Euler使用的顺序是 (pitch, yaw, roll) 对应 (X, Y, Z)
-            rotations.Add(Quaternion.Euler(points[i].pitch, points[i].yaw, points[i].roll));
+            if (points[i].hasQuaternion)
+            {
+                Quaternion q = new Quaternion(points[i].qx, points[i].qy, points[i].qz, points[i].qw);
+                rotations.Add(NormalizeQuaternion(q));
+            }
+            else
+            {
+                // Fallback for old packets: roll/pitch/yaw are XYZ Euler angles in degrees.
+                rotations.Add(Quaternion.Euler(points[i].roll, points[i].pitch, points[i].yaw));
+            }
         }
         
         return rotations;
+    }
+
+    Quaternion NormalizeQuaternion(Quaternion q)
+    {
+        float norm = Mathf.Sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+        if (norm < 1e-6f)
+        {
+            return Quaternion.identity;
+        }
+        return new Quaternion(q.x / norm, q.y / norm, q.z / norm, q.w / norm);
+    }
+
+    List<float> ExtractGripperWidths(List<TrajectoryPoint> points)
+    {
+        List<float> widths = new List<float>();
+
+        for (int i = 0; i < points.Count; i++)
+        {
+            widths.Add(points[i].gripperWidth);
+        }
+
+        return widths;
     }
 
     // 创建轨迹点（球体）
@@ -348,26 +393,37 @@ public class ChunkVisualizer : MonoBehaviour
         }
     }
 
-    void CacheTrajectoryPoses(List<Vector3> positions, List<Quaternion> rotations)
+    void CacheTrajectoryPoses(List<Vector3> positions, List<Quaternion> rotations, List<float> gripperWidths)
     {
         cachedPositions = new List<Vector3>(positions);
         cachedRotations = new List<Quaternion>(rotations);
+        cachedGripperWidths = new List<float>(gripperWidths);
     }
 
-    void UpdateLastPointGhost()
+    void UpdateSampledPointGhosts()
     {
-        if (!EnsureGhost(ref lastPointGhost, "GhostGripper_Last"))
+        sampledGhostIndices = BuildSampledGhostIndices();
+
+        for (int i = 0; i < sampledGhostIndices.Count; i++)
         {
-            return;
+            if (!EnsureSampledGhost(i))
+            {
+                continue;
+            }
+
+            int pointIndex = sampledGhostIndices[i];
+            GameObject ghost = sampledPointGhosts[i];
+            SetGhostPose(ghost, pointIndex);
+            UpdateJawWidthForGhost(ghost, GetGripperWidthForIndex(pointIndex));
         }
 
-        int lastIndex = cachedPositions.Count - 1;
-        if (lastIndex < 0)
+        for (int i = sampledGhostIndices.Count; i < sampledPointGhosts.Count; i++)
         {
-            return;
+            if (sampledPointGhosts[i] != null)
+            {
+                sampledPointGhosts[i].SetActive(false);
+            }
         }
-
-        SetGhostPose(lastPointGhost, lastIndex);
     }
 
     void UpdateSelectedGhostPose()
@@ -379,16 +435,44 @@ public class ChunkVisualizer : MonoBehaviour
 
         if (!HasCachedIndex(selectedGhostIndex))
         {
+            if (selectedPointGhost != null)
+            {
+                selectedPointGhost.SetActive(false);
+            }
             return;
         }
 
         SetGhostPose(selectedPointGhost, selectedGhostIndex);
+        UpdateJawWidthForGhost(selectedPointGhost, GetGripperWidthForIndex(selectedGhostIndex));
     }
 
     void SetGhostPose(GameObject ghost, int index)
     {
         ghost.transform.localPosition = cachedPositions[index];
         ghost.transform.localRotation = cachedRotations[index] * Quaternion.Euler(ghostRotationOffsetEuler);
+    }
+
+    List<int> BuildSampledGhostIndices()
+    {
+        List<int> indices = new List<int>();
+        int stride = Mathf.Max(1, ghostSampleStride);
+
+        for (int index = stride - 1; index < cachedPositions.Count; index += stride)
+        {
+            indices.Add(index);
+        }
+
+        if (indices.Count == 0 && cachedPositions.Count > 0)
+        {
+            indices.Add(cachedPositions.Count - 1);
+        }
+
+        return indices;
+    }
+
+    bool IsSampledGhostIndex(int pointIndex)
+    {
+        return sampledGhostIndices.Contains(pointIndex);
     }
 
     bool HasCachedIndex(int index)
@@ -416,11 +500,28 @@ public class ChunkVisualizer : MonoBehaviour
         return true;
     }
 
+    bool EnsureSampledGhost(int listIndex)
+    {
+        while (sampledPointGhosts.Count <= listIndex)
+        {
+            GameObject newGhost = null;
+            if (!EnsureGhost(ref newGhost, $"GhostGripper_Sampled_{sampledPointGhosts.Count}"))
+            {
+                return false;
+            }
+            sampledPointGhosts.Add(newGhost);
+        }
+
+        return sampledPointGhosts[listIndex] != null;
+    }
+
     void UpdateGhostGripperJawWidth()
     {
-        float width = GetLiveGripperWidth();
-        UpdateJawWidthForGhost(lastPointGhost, width);
-        UpdateJawWidthForGhost(selectedPointGhost, width);
+        for (int i = 0; i < sampledGhostIndices.Count && i < sampledPointGhosts.Count; i++)
+        {
+            UpdateJawWidthForGhost(sampledPointGhosts[i], GetGripperWidthForIndex(sampledGhostIndices[i]));
+        }
+        UpdateJawWidthForGhost(selectedPointGhost, GetGripperWidthForIndex(selectedGhostIndex));
     }
 
     void UpdateJawWidthForGhost(GameObject ghost, float width)
@@ -433,13 +534,27 @@ public class ChunkVisualizer : MonoBehaviour
         GripperJawController jawController = ghost.GetComponentInChildren<GripperJawController>();
         if (jawController != null)
         {
-            jawController.jawWidth = width;
+            jawController.jawWidth = Mathf.Max(0f, width);
         }
+    }
+
+    float GetGripperWidthForIndex(int index)
+    {
+        if (index >= 0 && index < cachedGripperWidths.Count)
+        {
+            float width = cachedGripperWidths[index];
+            if (!float.IsNaN(width) && width >= 0f)
+            {
+                return width;
+            }
+        }
+
+        return GetLiveGripperWidth();
     }
 
     float GetLiveGripperWidth()
     {
-        if (VisualizationServer.instance != null && VisualizationServer.instance.leftGripperWidth > 0f)
+        if (VisualizationServer.instance != null && VisualizationServer.instance.hasLeftGripperWidth)
         {
             return VisualizationServer.instance.leftGripperWidth;
         }
@@ -535,16 +650,16 @@ public class ChunkVisualizer : MonoBehaviour
 
     void UpdateGhostVisibility()
     {
-        int lastIndex = cachedPositions.Count - 1;
-        bool hasLast = lastIndex >= 0;
-
-        if (lastPointGhost != null)
+        for (int i = 0; i < sampledPointGhosts.Count; i++)
         {
-            lastPointGhost.SetActive(showGhostGrippers && hasLast);
+            if (sampledPointGhosts[i] != null)
+            {
+                sampledPointGhosts[i].SetActive(showGhostGrippers && i < sampledGhostIndices.Count);
+            }
         }
 
         bool showSelected = showGhostGrippers && selectedGhostEditing && HasCachedIndex(selectedGhostIndex);
-        if (showSelected && selectedGhostIndex == lastIndex)
+        if (showSelected && IsSampledGhostIndex(selectedGhostIndex))
         {
             showSelected = false;
         }

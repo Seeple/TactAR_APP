@@ -32,6 +32,7 @@ public class VisualizationServer : MonoBehaviour
     public Transform leftTCP;
     public Transform rightTCP;
     public float leftGripperWidth;
+    public bool hasLeftGripperWidth = false;
 
     [Header("Robot TCP ghost")]
     public bool showRobotTcpGhost = false;
@@ -364,6 +365,7 @@ public class VisualizationServer : MonoBehaviour
         if (pose.leftGripperState != null && pose.leftGripperState.Count > 0)
         {
             leftGripperWidth = pose.leftGripperState[0];
+            hasLeftGripperWidth = true;
         }
 
         UpdateRobotGhost();
