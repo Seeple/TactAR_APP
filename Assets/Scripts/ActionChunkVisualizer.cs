@@ -12,6 +12,8 @@ using System.Threading;
 
 public class ChunkVisualizer : MonoBehaviour
 {
+    public event Action<List<Vector3>, List<Quaternion>, List<float>> TrajectoryUpdated;
+
     [Header("网络设置")]
     public int port = 10006; 
     
@@ -186,6 +188,7 @@ public class ChunkVisualizer : MonoBehaviour
         CreateConnectionLines(positions);
         CreateCoordinateAxes(positions, rotations);
         CacheTrajectoryPoses(positions, rotations, gripperWidths);
+        NotifyTrajectoryUpdated();
         UpdateSampledPointGhosts();
         UpdateSelectedGhostPose();
         UpdateGhostVisibility();
@@ -398,6 +401,21 @@ public class ChunkVisualizer : MonoBehaviour
         cachedPositions = new List<Vector3>(positions);
         cachedRotations = new List<Quaternion>(rotations);
         cachedGripperWidths = new List<float>(gripperWidths);
+    }
+
+    void NotifyTrajectoryUpdated()
+    {
+        Action<List<Vector3>, List<Quaternion>, List<float>> handler = TrajectoryUpdated;
+        if (handler == null)
+        {
+            return;
+        }
+
+        handler(
+            new List<Vector3>(cachedPositions),
+            new List<Quaternion>(cachedRotations),
+            new List<float>(cachedGripperWidths)
+        );
     }
 
     void UpdateSampledPointGhosts()
@@ -750,6 +768,20 @@ public class ChunkVisualizer : MonoBehaviour
     public int GetLastPointIndex()
     {
         return pointObjects.Count > 0 ? pointObjects.Count - 1 : -1;
+    }
+
+    public Transform GetTrajectoryRootTransform()
+    {
+        return trajectoryContainer != null ? trajectoryContainer.transform : null;
+    }
+
+    public bool TryGetTrajectorySnapshot(out List<Vector3> positions, out List<Quaternion> rotations, out List<float> gripperWidths)
+    {
+        positions = new List<Vector3>(cachedPositions);
+        rotations = new List<Quaternion>(cachedRotations);
+        gripperWidths = new List<float>(cachedGripperWidths);
+
+        return positions.Count > 0;
     }
     
     void OnDestroy()

@@ -80,7 +80,7 @@ public class MyKeyboard : MonoBehaviour
 
         showText.color = isJump ? Color.red : Color.white;
 
-        string header = "Press B to toggle selection mode\n" +
+        string header = "Press B to toggle magnified-map selection\n" +
                         "Press Y to lock the last action chunk point";
 
         string indexLine = $"IndexTip: {indexPos.x:F3}, {indexPos.y:F3}, {indexPos.z:F3}";

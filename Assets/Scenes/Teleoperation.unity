@@ -1130,14 +1130,8 @@ MonoBehaviour:
   collisionMask:
     serializedVersion: 2
     m_Bits: 4294967295
-  enableRaySelection: 1
-  rayLength: 10
-  rayColor: {r: 0, g: 1, b: 0, a: 1}
-  rayHitColor: {r: 1, g: 0, b: 0, a: 1}
-  rayWidth: 0.003
-  raycastMask:
-    serializedVersion: 2
-    m_Bits: 4294967295
+  enableMagnifiedMapSelection: 1
+  magnifiedTrajectoryMap: {fileID: 0}
   pinchThreshold: 0.85
   releaseThreshold: 0.5
   showDebugSphere: 1

@@ -150,13 +150,9 @@ public class VRController : MonoBehaviour
     public float collisionRadius = 0.02f;  // 碰撞检测半径
     public LayerMask collisionMask = ~0;  // 碰撞检测层
 
-    [Header("Ray selection settings")]
-    public bool enableRaySelection = true;
-    public float rayLength = 10.0f;
-    public Color rayColor = Color.green;
-    public Color rayHitColor = Color.red;
-    public float rayWidth = 0.003f;
-    public LayerMask raycastMask = ~0;
+    [Header("放大映射选择设置")]
+    public bool enableMagnifiedMapSelection = true;
+    public MagnifiedTrajectoryMap magnifiedTrajectoryMap;
     
     [Header("捏合手势设置")]
     public float pinchThreshold = 0.85f;  // 捏合强度阈值（0-1）
@@ -172,8 +168,7 @@ public class VRController : MonoBehaviour
     private bool isEditingTrajectory = false;
     private bool wasPinching = false;  // 上一帧是否在捏合
 
-    private LineRenderer rightHandRay;
-    private bool useRaySelection = false;
+    private bool useMagnifiedMapSelection = false;
     private bool useLastPointSelection = false;
     private bool actionChunkVisible = true;
     private bool ghostGrippersVisible = true;
@@ -194,10 +189,27 @@ public class VRController : MonoBehaviour
         // 初始化碰撞检测
         InitializeCollisionDetection();
 
-        // Initialize ray selection
-        InitializeRay();
+        InitializeMagnifiedTrajectoryMap();
 
         UpdateDebugVisibility();
+    }
+
+    void InitializeMagnifiedTrajectoryMap()
+    {
+        if (magnifiedTrajectoryMap == null)
+        {
+            magnifiedTrajectoryMap = gameObject.AddComponent<MagnifiedTrajectoryMap>();
+        }
+
+        if (magnifiedTrajectoryMap.headTransform == null)
+        {
+            magnifiedTrajectoryMap.headTransform = ovrhead;
+        }
+
+        magnifiedTrajectoryMap.selectionRadius = collisionRadius;
+        magnifiedTrajectoryMap.Initialize();
+        magnifiedTrajectoryMap.SetSource(chunkVisualizer);
+        magnifiedTrajectoryMap.SetVisible(false);
     }
     
     /// <summary>
@@ -247,40 +259,6 @@ public class VRController : MonoBehaviour
         }
     }
 
-    void InitializeRay()
-    {
-        GameObject rayGO = new GameObject("RightHandRay");
-
-        if (rightHand != null && rightHand.PointerPose != null)
-        {
-            rayGO.transform.SetParent(rightHand.PointerPose);
-        }
-        else
-        {
-            Debug.LogWarning("VRController: RightHand PointerPose not found, ray attached to root");
-            rayGO.transform.SetParent(transform);
-        }
-
-        rightHandRay = rayGO.AddComponent<LineRenderer>();
-        ConfigureRay(rightHandRay);
-        rightHandRay.enabled = false;
-    }
-
-    void ConfigureRay(LineRenderer ray)
-    {
-        ray.startWidth = rayWidth;
-        ray.endWidth = rayWidth;
-        ray.material = new Material(Shader.Find("Sprites/Default"));
-        ray.startColor = rayColor;
-        ray.endColor = rayColor;
-        ray.positionCount = 2;
-        ray.enabled = enableRaySelection;
-
-        // Avoid starting at origin
-        ray.SetPosition(0, Vector3.zero);
-        ray.SetPosition(1, Vector3.forward);
-    }
-    
     /// <summary>
     /// 等待 OVRSkeleton 初始化完成
     /// OVRSkeleton 需要几帧才能完成骨骼数据加载
@@ -380,10 +358,11 @@ public class VRController : MonoBehaviour
         // Toggle selection mode with B button
         if (allowControllerButtons && OVRInput.GetDown(OVRInput.RawButton.B))
         {
-            useRaySelection = !useRaySelection;
+            useMagnifiedMapSelection = !useMagnifiedMapSelection;
             ClearHoverState();
+            ClearSelectedState();
             UpdateDebugVisibility();
-            Debug.Log($"VRController: Selection mode = {(useRaySelection ? "Ray" : "Collision")}");
+            Debug.Log($"VRController: Selection mode = {(useMagnifiedMapSelection ? "MagnifiedMap" : "Collision")}");
         }
 
         // 左手摇杆: 切换键盘
@@ -404,9 +383,9 @@ public class VRController : MonoBehaviour
                 UpdateLastPointHover();
                 HandlePinchGesture();
             }
-            else if (useRaySelection && enableRaySelection)
+            else if (useMagnifiedMapSelection && enableMagnifiedMapSelection)
             {
-                UpdateHandRaySelection();
+                UpdateMagnifiedMapSelection();
                 HandlePinchGesture();
             }
             else if (enableCollisionDetection)
@@ -441,6 +420,7 @@ public class VRController : MonoBehaviour
         {
             debugSphere.SetActive(true);
             debugSphere.transform.position = indexFingerTip.position;
+            debugSphere.transform.localScale = Vector3.one * collisionRadius * 2f;
         }
         
         bool allowHoverUpdate = !useLastPointSelection;
@@ -510,62 +490,50 @@ public class VRController : MonoBehaviour
         }
     }
 
-    void UpdateHandRaySelection()
+    void UpdateMagnifiedMapSelection()
     {
-        if (rightHand.PointerPose == null || !rightHand.IsPointerPoseValid)
+        if (indexFingerTip == null || magnifiedTrajectoryMap == null)
         {
-            if (rightHandRay != null)
-            {
-                rightHandRay.enabled = false;
-            }
+            if (debugSphere != null) debugSphere.SetActive(false);
             ClearHoverState();
             return;
         }
 
-        if (rightHandRay != null)
+        magnifiedTrajectoryMap.selectionRadius = collisionRadius;
+        magnifiedTrajectoryMap.SetVisible(true);
+
+        if (debugSphere != null)
         {
-            rightHandRay.enabled = enableRaySelection;
+            debugSphere.SetActive(true);
+            debugSphere.transform.position = indexFingerTip.position;
+            debugSphere.transform.localScale = Vector3.one * collisionRadius * 2f;
         }
 
-        Ray ray = new Ray(rightHand.PointerPose.position, rightHand.PointerPose.forward);
-        RaycastHit hit;
+        ClearHoverState();
 
-        if (!useLastPointSelection)
+        int closestIndex;
+        if (magnifiedTrajectoryMap.TryGetClosestPoint(indexFingerTip.position, collisionRadius, out closestIndex))
         {
-            ClearHoverState();
-        }
-
-        if (Physics.Raycast(ray, out hit, rayLength, raycastMask))
-        {
-            TrajectoryPointData pointData = hit.collider.GetComponent<TrajectoryPointData>();
-            if (pointData != null)
+            hoveredPointIndex = closestIndex;
+            if (chunkVisualizer != null)
             {
-                if (!useLastPointSelection)
-                {
-                    hoveredPointIndex = pointData.pointIndex;
-                    if (chunkVisualizer != null)
-                    {
-                        chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
-                    }
-                }
+                chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+            }
+            magnifiedTrajectoryMap.SetPointHovered(hoveredPointIndex, true);
 
-                if (rightHandRay != null)
-                {
-                    rightHandRay.startColor = rayHitColor;
-                    rightHandRay.endColor = rayHitColor;
-                    rightHandRay.SetPosition(0, ray.origin);
-                    rightHandRay.SetPosition(1, hit.point);
-                }
-                return;
+            if (debugSphere != null)
+            {
+                debugSphere.GetComponent<Renderer>().material.color =
+                    new Color(1f, 0f, 0f, 0.5f);
             }
         }
-
-        if (rightHandRay != null)
+        else
         {
-            rightHandRay.startColor = rayColor;
-            rightHandRay.endColor = rayColor;
-            rightHandRay.SetPosition(0, ray.origin);
-            rightHandRay.SetPosition(1, ray.origin + ray.direction * rayLength);
+            if (debugSphere != null)
+            {
+                debugSphere.GetComponent<Renderer>().material.color =
+                    new Color(debugSphereColor.r, debugSphereColor.g, debugSphereColor.b, 0.3f);
+            }
         }
     }
 
@@ -575,17 +543,21 @@ public class VRController : MonoBehaviour
         {
             chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
         }
+        if (hoveredPointIndex >= 0 && magnifiedTrajectoryMap != null)
+        {
+            magnifiedTrajectoryMap.SetPointHovered(hoveredPointIndex, false);
+        }
         hoveredPointIndex = -1;
     }
 
     void UpdateDebugVisibility()
     {
-        bool showRay = useRaySelection && enableRaySelection && !useLastPointSelection;
-        bool showSphere = showDebugSphere && !useRaySelection && !useLastPointSelection;
+        bool showMagnifiedMap = useMagnifiedMapSelection && enableMagnifiedMapSelection && !useLastPointSelection;
+        bool showSphere = showDebugSphere && !useLastPointSelection;
 
-        if (rightHandRay != null)
+        if (magnifiedTrajectoryMap != null)
         {
-            rightHandRay.enabled = showRay;
+            magnifiedTrajectoryMap.SetVisible(showMagnifiedMap);
         }
 
         if (debugSphere != null)
@@ -600,10 +572,19 @@ public class VRController : MonoBehaviour
         {
             chunkVisualizer.SetPointSelected(selectedPointIndex, false);
         }
+        if (selectedPointIndex >= 0 && magnifiedTrajectoryMap != null)
+        {
+            magnifiedTrajectoryMap.SetPointSelected(selectedPointIndex, false);
+        }
         selectedPointIndex = -1;
         isEditingTrajectory = false;
         message.trajectoryEdit.isEditing = false;
         message.trajectoryEdit.selectedPointIndex = -1;
+
+        if (chunkVisualizer != null)
+        {
+            chunkVisualizer.SetSelectedGhost(-1, false);
+        }
     }
 
     void UpdateLastPointHover()
@@ -665,12 +646,20 @@ public class VRController : MonoBehaviour
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, false);
             }
+            if (selectedPointIndex >= 0 && selectedPointIndex != hoveredPointIndex && magnifiedTrajectoryMap != null)
+            {
+                magnifiedTrajectoryMap.SetPointSelected(selectedPointIndex, false);
+            }
             
             selectedPointIndex = hoveredPointIndex;
             if (chunkVisualizer != null)
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, true);
                 chunkVisualizer.SetSelectedGhost(selectedPointIndex, true);
+            }
+            if (magnifiedTrajectoryMap != null)
+            {
+                magnifiedTrajectoryMap.SetPointSelected(selectedPointIndex, true);
             }
             isEditingTrajectory = true;
             
@@ -698,9 +687,9 @@ public class VRController : MonoBehaviour
             message.trajectoryEdit.isEditing = true;
             message.trajectoryEdit.selectedPointIndex = selectedPointIndex;
             
-            // 使用食指尖端的位姿（原始 VR 空间坐标）
-            Vector3 pos = indexFingerTip.position;
-            Quaternion rot = indexFingerTip.rotation;
+            Vector3 pos;
+            Quaternion rot;
+            GetEffectiveIndexTipPose(out pos, out rot);
             
             message.trajectoryEdit.editedPointPos[0] = pos.x;
             message.trajectoryEdit.editedPointPos[1] = pos.y;
@@ -716,6 +705,51 @@ public class VRController : MonoBehaviour
                 chunkVisualizer.SetSelectedGhost(selectedPointIndex, isEditingTrajectory);
             }
         }
+    }
+
+    bool ShouldUseMagnifiedPoseMapping()
+    {
+        return useMagnifiedMapSelection &&
+               enableMagnifiedMapSelection &&
+               !useLastPointSelection &&
+               magnifiedTrajectoryMap != null;
+    }
+
+    bool TryMapMagnifiedPose(Vector3 sourcePosition, Quaternion sourceRotation, out Vector3 mappedPosition, out Quaternion mappedRotation)
+    {
+        mappedPosition = sourcePosition;
+        mappedRotation = sourceRotation;
+
+        if (!ShouldUseMagnifiedPoseMapping())
+        {
+            return false;
+        }
+
+        return magnifiedTrajectoryMap.TryMapProxyPoseToTrajectoryWorld(sourcePosition, sourceRotation, out mappedPosition, out mappedRotation);
+    }
+
+    bool GetEffectiveIndexTipPose(out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+
+        if (indexFingerTip == null)
+        {
+            return false;
+        }
+
+        position = indexFingerTip.position;
+        rotation = indexFingerTip.rotation;
+
+        Vector3 mappedPosition;
+        Quaternion mappedRotation;
+        if (TryMapMagnifiedPose(position, rotation, out mappedPosition, out mappedRotation))
+        {
+            position = mappedPosition;
+            rotation = mappedRotation;
+        }
+
+        return true;
     }
     
     /// <summary>
@@ -741,6 +775,10 @@ public class VRController : MonoBehaviour
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, false);
             }
+            if (magnifiedTrajectoryMap != null)
+            {
+                magnifiedTrajectoryMap.SetPointSelected(selectedPointIndex, false);
+            }
             
             // 清除选中索引
             selectedPointIndex = -1;
@@ -762,7 +800,7 @@ public class VRController : MonoBehaviour
         handMessage.handPoseQuat[3] = 0f;
     }
 
-    void UpdateHandPoseMessage(HandMessage handMessage, OVRHand sourceHand, Transform poseTransform)
+    void UpdateHandPoseMessage(HandMessage handMessage, OVRHand sourceHand, Transform poseTransform, bool useEffectiveIndexPose = false)
     {
         ClearHandPoseMessage(handMessage);
 
@@ -779,6 +817,16 @@ public class VRController : MonoBehaviour
 
         Vector3 pos = poseTransform.position;
         Quaternion rot = poseTransform.rotation;
+        if (useEffectiveIndexPose)
+        {
+            Vector3 mappedPos;
+            Quaternion mappedRot;
+            if (TryMapMagnifiedPose(pos, rot, out mappedPos, out mappedRot))
+            {
+                pos = mappedPos;
+                rot = mappedRot;
+            }
+        }
 
         handMessage.handPosePos[0] = pos.x;
         handMessage.handPosePos[1] = pos.y;
@@ -846,7 +894,7 @@ public class VRController : MonoBehaviour
         message.leftHand.buttonState[3] = OVRInput.Get(OVRInput.RawButton.LIndexTrigger);
         message.leftHand.buttonState[4] = OVRInput.Get(OVRInput.RawButton.LHandTrigger);
 
-        UpdateHandPoseMessage(message.rightHand, rightHand, indexFingerTip);
+        UpdateHandPoseMessage(message.rightHand, rightHand, indexFingerTip, true);
         UpdateHandPoseMessage(message.leftHand, leftHand, null);
 
         message.TransformToAlignSpace();
