@@ -50,6 +50,8 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
     private bool initialized = false;
     private bool visible = false;
     private bool subscribedToSource = false;
+    private bool hasLockedWorldPosition = false;
+    private Vector3 lockedWorldPosition = Vector3.zero;
 
     void Awake()
     {
@@ -65,7 +67,10 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
     void LateUpdate()
     {
         EnsureHeadTransform();
-        UpdateRootPose();
+        if (visible)
+        {
+            ApplyRootPose();
+        }
     }
 
     void OnDestroy()
@@ -82,7 +87,7 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
         {
             EnsureHeadTransform();
             EnsureRoot();
-            UpdateRootPose();
+            ApplyRootPose();
             return;
         }
 
@@ -118,9 +123,17 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
 
     public void SetVisible(bool isVisible)
     {
+        bool wasVisible = visible;
         visible = isVisible;
         EnsureRoot();
-        UpdateRootPose();
+        if (visible && !wasVisible)
+        {
+            RefreshPlacementFromHead();
+        }
+        else
+        {
+            ApplyRootPose();
+        }
 
         if (mapRoot != null)
         {
@@ -131,6 +144,24 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
     public bool IsVisible()
     {
         return visible;
+    }
+
+    public void RefreshPlacementFromHead()
+    {
+        EnsureHeadTransform();
+        EnsureRoot();
+
+        if (headTransform != null)
+        {
+            lockedWorldPosition = headTransform.TransformPoint(localOffset);
+        }
+        else
+        {
+            lockedWorldPosition = localOffset;
+        }
+
+        hasLockedWorldPosition = true;
+        ApplyRootPose();
     }
 
     public bool TryGetClosestPoint(Vector3 worldPosition, float radius, out int pointIndex)
@@ -506,25 +537,53 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
         }
 
         mapRoot = new GameObject("MagnifiedTrajectoryMap");
-        UpdateRootPose();
+        ApplyRootPose();
         mapRoot.SetActive(visible);
     }
 
-    void UpdateRootPose()
+    void ApplyRootPose()
     {
-        if (mapRoot == null || headTransform == null)
+        if (mapRoot == null)
         {
             return;
         }
 
-        if (mapRoot.transform.parent != headTransform)
+        if (mapRoot.transform.parent != null)
         {
-            mapRoot.transform.SetParent(headTransform, false);
+            mapRoot.transform.SetParent(null, true);
         }
 
-        mapRoot.transform.localPosition = localOffset;
-        mapRoot.transform.localRotation = Quaternion.identity;
+        if (!hasLockedWorldPosition)
+        {
+            if (headTransform != null)
+            {
+                lockedWorldPosition = headTransform.TransformPoint(localOffset);
+            }
+            else
+            {
+                lockedWorldPosition = localOffset;
+            }
+        }
+
+        mapRoot.transform.position = lockedWorldPosition;
+        mapRoot.transform.rotation = GetTrajectoryRootRotation();
         mapRoot.transform.localScale = Vector3.one;
+    }
+
+    Quaternion GetTrajectoryRootRotation()
+    {
+        Transform trajectoryRoot = GetTrajectoryRoot();
+        if (trajectoryRoot != null)
+        {
+            return trajectoryRoot.rotation;
+        }
+
+        if (Calibration.instance != null)
+        {
+            return Calibration.instance.transform.rotation;
+        }
+
+        return Quaternion.identity;
     }
 
     void CreateMaterials()
