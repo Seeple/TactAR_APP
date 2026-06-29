@@ -189,6 +189,11 @@ public class VRController : MonoBehaviour
     [Header("放大映射选择设置")]
     public bool enableMagnifiedMapSelection = true;
     public MagnifiedTrajectoryMap magnifiedTrajectoryMap;
+    public float magnifiedSelectionRadius = 0.005f;
+
+    [Header("选择稳定性")]
+    public float hoverGraceSeconds = 0.15f;
+    public float pinchSelectionRadiusMultiplier = 1.35f;
     
     [Header("捏合手势设置")]
     public float pinchThreshold = 0.85f;  // 捏合强度阈值（0-1）
@@ -203,6 +208,7 @@ public class VRController : MonoBehaviour
     
     private GameObject debugSphere;  // 调试用的碰撞检测球体
     private int hoveredPointIndex = -1;
+    private float lastHoverTime = -1000f;
     private int selectedPointIndex = -1;
     private bool isEditingTrajectory = false;
     private bool wasPinching = false;  // 上一帧是否在捏合
@@ -250,7 +256,7 @@ public class VRController : MonoBehaviour
             magnifiedTrajectoryMap.headTransform = ovrhead;
         }
 
-        magnifiedTrajectoryMap.selectionRadius = collisionRadius;
+        magnifiedTrajectoryMap.selectionRadius = GetMagnifiedSelectionRadius();
         magnifiedTrajectoryMap.Initialize();
         magnifiedTrajectoryMap.SetSource(chunkVisualizer);
         magnifiedTrajectoryMap.SetVisible(false);
@@ -438,6 +444,10 @@ public class VRController : MonoBehaviour
                 HandlePinchGesture();
             }
         }
+        else
+        {
+            ExpireHoverStateIfNeeded();
+        }
         
         // 更新编辑数据
         if (isEditingTrajectory && rightHand != null)
@@ -450,12 +460,118 @@ public class VRController : MonoBehaviour
     /// 核心方法：使用物理碰撞检测与轨迹点的接触
     /// 关键实现：使用 Physics.OverlapSphere 检测食指尖端附近的碰撞体
     /// </summary>
+    float GetMagnifiedSelectionRadius()
+    {
+        return Mathf.Max(collisionRadius, magnifiedSelectionRadius);
+    }
+
+    float GetPinchSelectionRadius(float baseRadius)
+    {
+        return Mathf.Max(0.001f, baseRadius * Mathf.Max(1f, pinchSelectionRadiusMultiplier));
+    }
+
+    bool TryFindCollisionPoint(Vector3 worldPosition, float radius, out int pointIndex)
+    {
+        pointIndex = -1;
+
+        Collider[] hitColliders = Physics.OverlapSphere(
+            worldPosition,
+            radius,
+            collisionMask
+        );
+
+        float closestDistance = float.MaxValue;
+        foreach (Collider col in hitColliders)
+        {
+            TrajectoryPointData pointData = col.GetComponent<TrajectoryPointData>();
+            if (pointData == null)
+            {
+                pointData = col.GetComponentInParent<TrajectoryPointData>();
+            }
+
+            if (pointData == null)
+            {
+                continue;
+            }
+
+            float distance = Vector3.Distance(worldPosition, pointData.transform.position);
+            if (distance < closestDistance)
+            {
+                closestDistance = distance;
+                pointIndex = pointData.pointIndex;
+            }
+        }
+
+        return pointIndex >= 0;
+    }
+
+    void SetHoverPoint(int pointIndex)
+    {
+        if (pointIndex < 0)
+        {
+            ClearHoverState();
+            return;
+        }
+
+        if (hoveredPointIndex >= 0 && hoveredPointIndex != pointIndex)
+        {
+            if (chunkVisualizer != null)
+            {
+                chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
+            }
+            if (magnifiedTrajectoryMap != null)
+            {
+                magnifiedTrajectoryMap.SetPointHovered(hoveredPointIndex, false);
+            }
+        }
+
+        hoveredPointIndex = pointIndex;
+        lastHoverTime = Time.time;
+
+        if (chunkVisualizer != null)
+        {
+            chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
+        }
+        if (magnifiedTrajectoryMap != null)
+        {
+            magnifiedTrajectoryMap.SetPointHovered(hoveredPointIndex, true);
+        }
+    }
+
+    bool TryGetRecentHoveredPoint(out int pointIndex)
+    {
+        pointIndex = -1;
+
+        if (hoveredPointIndex < 0)
+        {
+            return false;
+        }
+
+        if (Time.time - lastHoverTime > Mathf.Max(0f, hoverGraceSeconds))
+        {
+            return false;
+        }
+
+        pointIndex = hoveredPointIndex;
+        return true;
+    }
+
+    void ExpireHoverStateIfNeeded()
+    {
+        int recentPointIndex;
+        if (hoveredPointIndex >= 0 && !TryGetRecentHoveredPoint(out recentPointIndex))
+        {
+            ClearHoverState();
+        }
+    }
+
     void UpdateCollisionDetection()
     {
         // 检查食指尖端是否可用
         if (indexFingerTip == null)
         {
             if (debugSphere != null) debugSphere.SetActive(false);
+            ExpireHoverStateIfNeeded();
             return;
         }
 
@@ -467,54 +583,11 @@ public class VRController : MonoBehaviour
             debugSphere.transform.localScale = Vector3.one * collisionRadius * 2f;
         }
         
-        bool allowHoverUpdate = !useLastPointSelection;
-        if (allowHoverUpdate)
-        {
-            if (hoveredPointIndex >= 0 && chunkVisualizer != null)
-            {
-                chunkVisualizer.SetPointHovered(hoveredPointIndex, false);
-                hoveredPointIndex = -1;
-            }
-        }
-        
-        // 核心：使用 Physics.OverlapSphere 检测碰撞
-        // 在食指尖端位置创建一个球形检测区域
-        Collider[] hitColliders = Physics.OverlapSphere(
-            indexFingerTip.position,
-            collisionRadius,
-            collisionMask
-        );
-        
-        // 遍历所有碰撞的对象，找到最近的轨迹点
-        TrajectoryPointData closestPoint = null;
-        float closestDistance = float.MaxValue;
-        
-        foreach (Collider col in hitColliders)
-        {
-            TrajectoryPointData pointData = col.GetComponent<TrajectoryPointData>();
-            if (pointData != null)
-            {
-                // 计算距离，选择最近的点
-                float distance = Vector3.Distance(indexFingerTip.position, col.transform.position);
-                if (distance < closestDistance)
-                {
-                    closestDistance = distance;
-                    closestPoint = pointData;
-                }
-            }
-        }
-        
         // 如果找到了碰撞的点，设置为悬停状态
-        if (closestPoint != null)
+        int closestIndex;
+        if (TryFindCollisionPoint(indexFingerTip.position, collisionRadius, out closestIndex))
         {
-            if (allowHoverUpdate)
-            {
-                hoveredPointIndex = closestPoint.pointIndex;
-                if (chunkVisualizer != null)
-                {
-                    chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
-                }
-            }
+            SetHoverPoint(closestIndex);
             
             // 调试球体变红表示接触
             if (debugSphere != null)
@@ -525,6 +598,8 @@ public class VRController : MonoBehaviour
         }
         else
         {
+            ExpireHoverStateIfNeeded();
+
             // 没有接触，恢复绿色
             if (debugSphere != null)
             {
@@ -536,34 +611,35 @@ public class VRController : MonoBehaviour
 
     void UpdateMagnifiedMapSelection()
     {
-        if (indexFingerTip == null || magnifiedTrajectoryMap == null)
+        if (magnifiedTrajectoryMap == null)
         {
             if (debugSphere != null) debugSphere.SetActive(false);
             ClearHoverState();
             return;
         }
 
-        magnifiedTrajectoryMap.selectionRadius = collisionRadius;
+        if (indexFingerTip == null)
+        {
+            if (debugSphere != null) debugSphere.SetActive(false);
+            ExpireHoverStateIfNeeded();
+            return;
+        }
+
+        float selectionRadius = GetMagnifiedSelectionRadius();
+        magnifiedTrajectoryMap.selectionRadius = selectionRadius;
         magnifiedTrajectoryMap.SetVisible(true);
 
         if (debugSphere != null)
         {
             debugSphere.SetActive(true);
             debugSphere.transform.position = indexFingerTip.position;
-            debugSphere.transform.localScale = Vector3.one * collisionRadius * 2f;
+            debugSphere.transform.localScale = Vector3.one * selectionRadius * 2f;
         }
 
-        ClearHoverState();
-
         int closestIndex;
-        if (magnifiedTrajectoryMap.TryGetClosestPoint(indexFingerTip.position, collisionRadius, out closestIndex))
+        if (magnifiedTrajectoryMap.TryGetClosestPoint(indexFingerTip.position, selectionRadius, out closestIndex))
         {
-            hoveredPointIndex = closestIndex;
-            if (chunkVisualizer != null)
-            {
-                chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
-            }
-            magnifiedTrajectoryMap.SetPointHovered(hoveredPointIndex, true);
+            SetHoverPoint(closestIndex);
 
             if (debugSphere != null)
             {
@@ -573,6 +649,8 @@ public class VRController : MonoBehaviour
         }
         else
         {
+            ExpireHoverStateIfNeeded();
+
             if (debugSphere != null)
             {
                 debugSphere.GetComponent<Renderer>().material.color =
@@ -592,6 +670,7 @@ public class VRController : MonoBehaviour
             magnifiedTrajectoryMap.SetPointHovered(hoveredPointIndex, false);
         }
         hoveredPointIndex = -1;
+        lastHoverTime = -1000f;
     }
 
     void UpdateDebugVisibility()
@@ -644,12 +723,7 @@ public class VRController : MonoBehaviour
         int lastIndex = chunkVisualizer.GetLastPointIndex();
         if (lastIndex < 0) return;
 
-        if (hoveredPointIndex != lastIndex)
-        {
-            ClearHoverState();
-            hoveredPointIndex = lastIndex;
-            chunkVisualizer.SetPointHovered(hoveredPointIndex, true);
-        }
+        SetHoverPoint(lastIndex);
     }
     
     /// <summary>
@@ -679,29 +753,62 @@ public class VRController : MonoBehaviour
     /// <summary>
     /// 选中轨迹点（捏合开始时触发）
     /// </summary>
-    void HandleTrajectorySelection()
+    bool TryResolveSelectionPointForPinch(out int pointIndex)
     {
+        pointIndex = -1;
+
         if (useLastPointSelection && chunkVisualizer != null)
         {
-            int lastIndex = chunkVisualizer.GetLastPointIndex();
-            if (lastIndex >= 0)
+            pointIndex = chunkVisualizer.GetLastPointIndex();
+            return pointIndex >= 0;
+        }
+
+        if (indexFingerTip != null)
+        {
+            if (useMagnifiedMapSelection && enableMagnifiedMapSelection && magnifiedTrajectoryMap != null)
             {
-                hoveredPointIndex = lastIndex;
+                float radius = GetPinchSelectionRadius(GetMagnifiedSelectionRadius());
+                magnifiedTrajectoryMap.SetVisible(true);
+                if (magnifiedTrajectoryMap.TryGetClosestPoint(indexFingerTip.position, radius, out pointIndex))
+                {
+                    return true;
+                }
+            }
+            else if (enableCollisionDetection)
+            {
+                float radius = GetPinchSelectionRadius(collisionRadius);
+                if (TryFindCollisionPoint(indexFingerTip.position, radius, out pointIndex))
+                {
+                    return true;
+                }
             }
         }
 
-        if (hoveredPointIndex >= 0)
+        return TryGetRecentHoveredPoint(out pointIndex);
+    }
+
+    void HandleTrajectorySelection()
+    {
+        int pointIndex;
+        if (!TryResolveSelectionPointForPinch(out pointIndex))
         {
-            if (selectedPointIndex >= 0 && selectedPointIndex != hoveredPointIndex && chunkVisualizer != null)
+            return;
+        }
+
+        SetHoverPoint(pointIndex);
+
+        if (pointIndex >= 0)
+        {
+            if (selectedPointIndex >= 0 && selectedPointIndex != pointIndex && chunkVisualizer != null)
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, false);
             }
-            if (selectedPointIndex >= 0 && selectedPointIndex != hoveredPointIndex && magnifiedTrajectoryMap != null)
+            if (selectedPointIndex >= 0 && selectedPointIndex != pointIndex && magnifiedTrajectoryMap != null)
             {
                 magnifiedTrajectoryMap.SetPointSelected(selectedPointIndex, false);
             }
             
-            selectedPointIndex = hoveredPointIndex;
+            selectedPointIndex = pointIndex;
             if (chunkVisualizer != null)
             {
                 chunkVisualizer.SetPointSelected(selectedPointIndex, true);
