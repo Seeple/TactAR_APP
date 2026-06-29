@@ -30,6 +30,20 @@ public class HandMessage
         handPoseValid = false;
     }
 
+    public HandMessage Clone()
+    {
+        HandMessage copy = new HandMessage();
+        Array.Copy(wristPos, copy.wristPos, wristPos.Length);
+        Array.Copy(wristQuat, copy.wristQuat, wristQuat.Length);
+        copy.triggerState = triggerState;
+        Array.Copy(buttonState, copy.buttonState, buttonState.Length);
+        Array.Copy(handPosePos, copy.handPosePos, handPosePos.Length);
+        Array.Copy(handPoseQuat, copy.handPoseQuat, handPoseQuat.Length);
+        copy.handPinchState = handPinchState;
+        copy.handPoseValid = handPoseValid;
+        return copy;
+    }
+
     public void TransformToAlignSpace()
     {
         if (Calibration.instance)
@@ -64,6 +78,16 @@ public class TrajectoryEditMessage
         editedPointPos = new float[3];
         editedPointQuat = new float[4];
     }
+
+    public TrajectoryEditMessage Clone()
+    {
+        TrajectoryEditMessage copy = new TrajectoryEditMessage();
+        copy.selectedPointIndex = selectedPointIndex;
+        copy.isEditing = isEditing;
+        Array.Copy(editedPointPos, copy.editedPointPos, editedPointPos.Length);
+        Array.Copy(editedPointQuat, copy.editedPointQuat, editedPointQuat.Length);
+        return copy;
+    }
     
     // Convert world-space pose to Calibration local space before sending
     public void TransformToAlignSpace()
@@ -97,6 +121,18 @@ public class HandEditMessage
         leftHand = new HandMessage();
         rightHand = new HandMessage();
         trajectoryEdit = new TrajectoryEditMessage();
+    }
+
+    public HandEditMessage Clone()
+    {
+        HandEditMessage copy = new HandEditMessage();
+        copy.timestamp = timestamp;
+        Array.Copy(headPos, copy.headPos, headPos.Length);
+        Array.Copy(headQuat, copy.headQuat, headQuat.Length);
+        copy.leftHand = leftHand.Clone();
+        copy.rightHand = rightHand.Clone();
+        copy.trajectoryEdit = trajectoryEdit.Clone();
+        return copy;
     }
     
     // Convert all world-space poses to Calibration local space
@@ -157,6 +193,9 @@ public class VRController : MonoBehaviour
     [Header("捏合手势设置")]
     public float pinchThreshold = 0.85f;  // 捏合强度阈值（0-1）
     public float releaseThreshold = 0.5f; // 松开阈值
+
+    [Header("编辑手部跟踪保护")]
+    public float editPoseGraceSeconds = 0.08f;
     
     [Header("可视化调试")]
     public bool showDebugSphere = true;  // 是否显示调试球体
@@ -172,6 +211,11 @@ public class VRController : MonoBehaviour
     private bool useLastPointSelection = false;
     private bool actionChunkVisible = true;
     private bool ghostGrippersVisible = true;
+    private bool hasLastValidEditPose = false;
+    private Vector3 lastValidEditPosePosition = Vector3.zero;
+    private Quaternion lastValidEditPoseRotation = Quaternion.identity;
+    private float lastValidEditPoseTime = -1000f;
+    private bool pendingTrajectoryEditStop = false;
 
     private HandEditMessage message;
     public bool LRinverse = false;
@@ -568,6 +612,13 @@ public class VRController : MonoBehaviour
 
     void ClearSelectedState()
     {
+        pendingTrajectoryEditStop = false;
+        hasLastValidEditPose = false;
+        if (magnifiedTrajectoryMap != null)
+        {
+            magnifiedTrajectoryMap.EndEdit();
+        }
+
         if (selectedPointIndex >= 0 && chunkVisualizer != null)
         {
             chunkVisualizer.SetPointSelected(selectedPointIndex, false);
@@ -578,8 +629,7 @@ public class VRController : MonoBehaviour
         }
         selectedPointIndex = -1;
         isEditingTrajectory = false;
-        message.trajectoryEdit.isEditing = false;
-        message.trajectoryEdit.selectedPointIndex = -1;
+        ClearTrajectoryEditPayload();
 
         if (chunkVisualizer != null)
         {
@@ -660,7 +710,13 @@ public class VRController : MonoBehaviour
             if (magnifiedTrajectoryMap != null)
             {
                 magnifiedTrajectoryMap.SetPointSelected(selectedPointIndex, true);
+                if (ShouldUseMagnifiedPoseMapping())
+                {
+                    magnifiedTrajectoryMap.BeginEdit(selectedPointIndex);
+                }
             }
+            hasLastValidEditPose = false;
+            pendingTrajectoryEditStop = false;
             isEditingTrajectory = true;
             
             Debug.Log($"[手势] 选中轨迹点: {selectedPointIndex}");
@@ -682,23 +738,18 @@ public class VRController : MonoBehaviour
             }
         }
 
-        if (selectedPointIndex >= 0 && indexFingerTip != null)
+        if (selectedPointIndex >= 0)
         {
-            message.trajectoryEdit.isEditing = true;
-            message.trajectoryEdit.selectedPointIndex = selectedPointIndex;
-            
             Vector3 pos;
             Quaternion rot;
-            GetEffectiveIndexTipPose(out pos, out rot);
-            
-            message.trajectoryEdit.editedPointPos[0] = pos.x;
-            message.trajectoryEdit.editedPointPos[1] = pos.y;
-            message.trajectoryEdit.editedPointPos[2] = pos.z;
-            
-            message.trajectoryEdit.editedPointQuat[0] = rot.w;
-            message.trajectoryEdit.editedPointQuat[1] = rot.x;
-            message.trajectoryEdit.editedPointQuat[2] = rot.y;
-            message.trajectoryEdit.editedPointQuat[3] = rot.z;
+            if (!TryGetFreshEffectiveIndexTipPose(out pos, out rot) &&
+                !TryGetRecentEditPose(out pos, out rot))
+            {
+                ClearTrajectoryEditPayload();
+                return;
+            }
+
+            WriteTrajectoryEditPose(selectedPointIndex, pos, rot);
 
             if (chunkVisualizer != null)
             {
@@ -728,18 +779,30 @@ public class VRController : MonoBehaviour
         return magnifiedTrajectoryMap.TryMapProxyPoseToTrajectoryWorld(sourcePosition, sourceRotation, out mappedPosition, out mappedRotation);
     }
 
-    bool GetEffectiveIndexTipPose(out Vector3 position, out Quaternion rotation)
+    bool IsFinitePose(Vector3 position, Quaternion rotation)
+    {
+        return !(float.IsNaN(position.x) || float.IsNaN(position.y) || float.IsNaN(position.z) ||
+                 float.IsInfinity(position.x) || float.IsInfinity(position.y) || float.IsInfinity(position.z) ||
+                 float.IsNaN(rotation.x) || float.IsNaN(rotation.y) || float.IsNaN(rotation.z) || float.IsNaN(rotation.w) ||
+                 float.IsInfinity(rotation.x) || float.IsInfinity(rotation.y) || float.IsInfinity(rotation.z) || float.IsInfinity(rotation.w));
+    }
+
+    bool TryGetFreshEffectiveIndexTipPose(out Vector3 position, out Quaternion rotation)
     {
         position = Vector3.zero;
         rotation = Quaternion.identity;
 
-        if (indexFingerTip == null)
+        if (rightHand == null || !rightHand.IsDataValid || indexFingerTip == null)
         {
             return false;
         }
 
         position = indexFingerTip.position;
         rotation = indexFingerTip.rotation;
+        if (!IsFinitePose(position, rotation))
+        {
+            return false;
+        }
 
         Vector3 mappedPosition;
         Quaternion mappedRotation;
@@ -749,7 +812,67 @@ public class VRController : MonoBehaviour
             rotation = mappedRotation;
         }
 
+        if (!IsFinitePose(position, rotation))
+        {
+            return false;
+        }
+
+        lastValidEditPosePosition = position;
+        lastValidEditPoseRotation = rotation;
+        lastValidEditPoseTime = Time.time;
+        hasLastValidEditPose = true;
+
         return true;
+    }
+
+    bool TryGetRecentEditPose(out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+
+        if (!hasLastValidEditPose)
+        {
+            return false;
+        }
+
+        if (Time.time - lastValidEditPoseTime > Mathf.Max(0f, editPoseGraceSeconds))
+        {
+            return false;
+        }
+
+        position = lastValidEditPosePosition;
+        rotation = lastValidEditPoseRotation;
+        return true;
+    }
+
+    void WriteTrajectoryEditPose(int pointIndex, Vector3 position, Quaternion rotation)
+    {
+        message.trajectoryEdit.isEditing = true;
+        message.trajectoryEdit.selectedPointIndex = pointIndex;
+        message.trajectoryEdit.editedPointPos[0] = position.x;
+        message.trajectoryEdit.editedPointPos[1] = position.y;
+        message.trajectoryEdit.editedPointPos[2] = position.z;
+        message.trajectoryEdit.editedPointQuat[0] = rotation.w;
+        message.trajectoryEdit.editedPointQuat[1] = rotation.x;
+        message.trajectoryEdit.editedPointQuat[2] = rotation.y;
+        message.trajectoryEdit.editedPointQuat[3] = rotation.z;
+    }
+
+    void ClearTrajectoryEditPayload()
+    {
+        message.trajectoryEdit.isEditing = false;
+        message.trajectoryEdit.selectedPointIndex = -1;
+    }
+
+    void CompletePendingTrajectoryEditStop()
+    {
+        if (!pendingTrajectoryEditStop)
+        {
+            return;
+        }
+
+        pendingTrajectoryEditStop = false;
+        ClearTrajectoryEditPayload();
     }
     
     /// <summary>
@@ -757,9 +880,32 @@ public class VRController : MonoBehaviour
     /// </summary>
     void StopTrajectoryEditing()
     {
+        int stoppedPointIndex = selectedPointIndex;
+        bool queuedFinalEditPose = false;
+
+        if (stoppedPointIndex >= 0)
+        {
+            Vector3 finalPos;
+            Quaternion finalRot;
+            if (TryGetFreshEffectiveIndexTipPose(out finalPos, out finalRot) ||
+                TryGetRecentEditPose(out finalPos, out finalRot))
+            {
+                WriteTrajectoryEditPose(stoppedPointIndex, finalPos, finalRot);
+                pendingTrajectoryEditStop = true;
+                queuedFinalEditPose = true;
+            }
+        }
+
         isEditingTrajectory = false;
-        message.trajectoryEdit.isEditing = false;
-        message.trajectoryEdit.selectedPointIndex = -1;
+        if (!queuedFinalEditPose)
+        {
+            ClearTrajectoryEditPayload();
+        }
+
+        if (magnifiedTrajectoryMap != null)
+        {
+            magnifiedTrajectoryMap.EndEdit();
+        }
 
         if (chunkVisualizer != null)
         {
@@ -897,13 +1043,16 @@ public class VRController : MonoBehaviour
         UpdateHandPoseMessage(message.rightHand, rightHand, indexFingerTip, true);
         UpdateHandPoseMessage(message.leftHand, leftHand, null);
 
-        message.TransformToAlignSpace();
+        HandEditMessage outboundMessage = message.Clone();
+        outboundMessage.TransformToAlignSpace();
 
-        string mes = JsonUtility.ToJson(message);
+        string mes = JsonUtility.ToJson(outboundMessage);
         byte[] bodyRaw = Encoding.UTF8.GetBytes(mes);
         string url = $"http://{ip}:{port}/unity";
         var content = new ByteArrayContent(bodyRaw);
         client.PostAsync(url, content);
+
+        CompletePendingTrajectoryEditStop();
     }
 
     public void RefreshIP(string ip)

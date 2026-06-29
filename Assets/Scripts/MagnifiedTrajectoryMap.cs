@@ -52,6 +52,15 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
     private bool subscribedToSource = false;
     private bool hasLockedWorldPosition = false;
     private Vector3 lockedWorldPosition = Vector3.zero;
+    private bool editBasisLocked = false;
+    private int lockedEditPointIndex = -1;
+    private Vector3 lockedEditTrajectoryCenterLocal = Vector3.zero;
+    private float lockedEditScale = 1f;
+    private Matrix4x4 lockedEditMapWorldToLocalMatrix = Matrix4x4.identity;
+    private Matrix4x4 lockedEditTrajectoryLocalToWorldMatrix = Matrix4x4.identity;
+    private Vector3 lockedEditMapRootPosition = Vector3.zero;
+    private Quaternion lockedEditMapRootRotation = Quaternion.identity;
+    private Quaternion lockedEditTrajectoryRootRotation = Quaternion.identity;
 
     void Awake()
     {
@@ -196,14 +205,63 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
         return true;
     }
 
+    public void BeginEdit(int pointIndex)
+    {
+        Initialize();
+        EnsureRoot();
+        ApplyRootPose();
+
+        if (mapRoot == null || activeScale <= 0.0001f)
+        {
+            return;
+        }
+
+        lockedEditPointIndex = pointIndex;
+        lockedEditTrajectoryCenterLocal = trajectoryCenterLocal;
+        lockedEditScale = Mathf.Max(0.001f, activeScale);
+        lockedEditMapRootPosition = mapRoot.transform.position;
+        lockedEditMapRootRotation = mapRoot.transform.rotation;
+        lockedEditMapWorldToLocalMatrix = mapRoot.transform.worldToLocalMatrix;
+        CaptureTrajectoryRootPose(out lockedEditTrajectoryLocalToWorldMatrix, out lockedEditTrajectoryRootRotation);
+        editBasisLocked = true;
+    }
+
+    public void EndEdit()
+    {
+        editBasisLocked = false;
+        lockedEditPointIndex = -1;
+    }
+
+    public bool IsEditBasisLocked()
+    {
+        return editBasisLocked;
+    }
+
     public bool TryMapProxyPoseToTrajectoryWorld(Vector3 proxyWorldPosition, Quaternion proxyWorldRotation, out Vector3 trajectoryWorldPosition, out Quaternion trajectoryWorldRotation)
     {
         trajectoryWorldPosition = proxyWorldPosition;
         trajectoryWorldRotation = proxyWorldRotation;
 
-        if (mapRoot == null || activeScale <= 0.0001f)
+        if (mapRoot == null)
         {
             return false;
+        }
+
+        if ((!editBasisLocked && activeScale <= 0.0001f) ||
+            (editBasisLocked && lockedEditScale <= 0.0001f))
+        {
+            return false;
+        }
+
+        if (editBasisLocked)
+        {
+            Vector3 lockedProxyLocalPosition = lockedEditMapWorldToLocalMatrix.MultiplyPoint3x4(proxyWorldPosition);
+            Vector3 lockedTrajectoryLocalPosition = lockedProxyLocalPosition / lockedEditScale + lockedEditTrajectoryCenterLocal;
+            trajectoryWorldPosition = lockedEditTrajectoryLocalToWorldMatrix.MultiplyPoint3x4(lockedTrajectoryLocalPosition);
+
+            Quaternion lockedProxyLocalRotation = Quaternion.Inverse(lockedEditMapRootRotation) * proxyWorldRotation;
+            trajectoryWorldRotation = lockedEditTrajectoryRootRotation * lockedProxyLocalRotation;
+            return true;
         }
 
         Vector3 proxyLocalPosition = mapRoot.transform.InverseTransformPoint(proxyWorldPosition);
@@ -233,6 +291,27 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
         trajectoryWorldRotation = trajectoryRootRotation * proxyLocalRotation;
 
         return true;
+    }
+
+    void CaptureTrajectoryRootPose(out Matrix4x4 localToWorldMatrix, out Quaternion rootRotation)
+    {
+        Transform trajectoryRoot = GetTrajectoryRoot();
+        if (trajectoryRoot != null)
+        {
+            localToWorldMatrix = trajectoryRoot.localToWorldMatrix;
+            rootRotation = trajectoryRoot.rotation;
+            return;
+        }
+
+        if (Calibration.instance != null)
+        {
+            localToWorldMatrix = Calibration.instance.transform.localToWorldMatrix;
+            rootRotation = Calibration.instance.transform.rotation;
+            return;
+        }
+
+        localToWorldMatrix = Matrix4x4.identity;
+        rootRotation = Quaternion.identity;
     }
 
     Transform GetTrajectoryRoot()
@@ -361,12 +440,20 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
             trajectoryLocalRotations.Add(Quaternion.identity);
         }
 
-        trajectoryCenterLocal = CalculateBoundsCenter(trajectoryLocalPositions);
-        activeScale = Mathf.Max(0.001f, mapScale);
+        if (!editBasisLocked)
+        {
+            trajectoryCenterLocal = CalculateBoundsCenter(trajectoryLocalPositions);
+            activeScale = Mathf.Max(0.001f, mapScale);
+        }
+        else
+        {
+            activeScale = lockedEditScale;
+        }
 
+        Vector3 centerForMap = editBasisLocked ? lockedEditTrajectoryCenterLocal : trajectoryCenterLocal;
         for (int i = 0; i < trajectoryLocalPositions.Count; i++)
         {
-            mapLocalPositions.Add((trajectoryLocalPositions[i] - trajectoryCenterLocal) * activeScale);
+            mapLocalPositions.Add((trajectoryLocalPositions[i] - centerForMap) * activeScale);
         }
 
         RebuildVisualization();
@@ -551,6 +638,14 @@ public class MagnifiedTrajectoryMap : MonoBehaviour
         if (mapRoot.transform.parent != null)
         {
             mapRoot.transform.SetParent(null, true);
+        }
+
+        if (editBasisLocked)
+        {
+            mapRoot.transform.position = lockedEditMapRootPosition;
+            mapRoot.transform.rotation = lockedEditMapRootRotation;
+            mapRoot.transform.localScale = Vector3.one;
+            return;
         }
 
         if (!hasLockedWorldPosition)
