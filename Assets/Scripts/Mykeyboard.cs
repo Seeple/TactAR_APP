@@ -2,6 +2,15 @@
 
 public class MyKeyboard : MonoBehaviour
 {
+    private const string ControlHelp =
+        "X + A: Calibration | Pinch: Select / drag point\n" +
+        "X: Action chunk | A: Ghost grippers\n" +
+        "B: Selection mode | Y: Last point\n" +
+        "L grip: Close gripper | R grip: Open gripper\n" +
+        "L trigger: Start / finish trajectory editing\n" +
+        "R stick click: Interpolate anchor -> last edit / chunk end\n" +
+        "L stick click: Show / hide keyboard";
+
     public TMPro.TextMeshProUGUI text;
     public TMPro.TextMeshProUGUI showText;
     public VRController Client;
@@ -80,8 +89,7 @@ public class MyKeyboard : MonoBehaviour
 
         showText.color = isJump ? Color.red : Color.white;
 
-        string header = "Press B to toggle magnified-map selection\n" +
-                        "Press Y to lock the last action chunk point";
+        string header = ControlHelp;
 
         string indexLine = $"IndexTip: {indexPos.x:F3}, {indexPos.y:F3}, {indexPos.z:F3}";
         string editLine = isEditing
